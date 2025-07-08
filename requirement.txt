@@ -1,0 +1,10 @@
+torch
+facenet-pytorch
+fastapi
+uvicorn
+faiss-cpu
+pillow
+python-multipart
+prometheus-client
+requests
+psycopg2-binary
