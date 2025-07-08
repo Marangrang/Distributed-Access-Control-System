@@ -117,7 +117,7 @@ This project includes a `docker-compose.yaml` that runs the verification service
 ### Local Development
 Start the API server:
 ```bash
-uvicorn verification_service.main:app --reload
+python verification_service/main.py
 ```
 
 ### Docker Compose
