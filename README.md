@@ -103,7 +103,7 @@ This project includes a `docker-compose.yaml` that runs the verification service
    ```bash
    docker compose up --build
    ```
-2. The FastAPI app will be available at [http://localhost:8080](http://localhost:8080)
+2. The FastAPI app will be available at [http://localhost:8080](http://localhost:8080) you can use [http://localhost:8080/docs](http://localhost:8080/docs) for testing
 3. MinIO web console will be at [http://localhost:9001](http://localhost:9001) (login: minioadmin / minioadmin)
 4. PostgreSQL will be available at `localhost:5432` (user: myuser, password: mypassword, db: mydb)
 
