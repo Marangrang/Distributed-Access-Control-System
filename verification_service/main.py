@@ -88,7 +88,7 @@ def metrics_endpoint():
 if __name__ == "__main__":
     import uvicorn
     print("Starting FastAPI server on port 8080...")
-    uvicorn.run("main:app", host="0.0.0.0", port=8080, reload=False)
+    uvicorn.run("verification_service.main:app", host="0.0.0.0", port=8080, reload=False)
 
 # NOTE: All models, index, and metadata are preloaded at startup for low latency. No per-request disk I/O.
 
