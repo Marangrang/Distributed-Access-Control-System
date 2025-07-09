@@ -26,4 +26,4 @@ EXPOSE 8080
 
 # Run the FastAPI app with configurable workers (default 2)
 ENV UVICORN_WORKERS=2
-CMD ["sh", "-c", "uvicorn verification_service.main:app --host 0.0.0.0 --port 8080 --workers ${UVICORN_WORKERS}"] 
+CMD ["uvicorn", "verification_service.main:app", "--host", "0.0.0.0", "--port", "8080", "--workers", "2"]
