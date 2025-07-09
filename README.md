@@ -117,7 +117,7 @@ This project includes a `docker-compose.yaml` that runs the verification service
 ### Local Development
 Start the API server:
 ```bash
-python verification_service/main.py
+python3 -m verification_service.main
 ```
 
 ### Docker Compose
