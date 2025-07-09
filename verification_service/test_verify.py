@@ -21,12 +21,12 @@ start = time.time()
 try:
     response = requests.post(url, json=payload, timeout=10)  # 10 second timeout
     elapsed = (time.time() - start) * 1000
-print("Status code:", response.status_code)
-print("Raw text:", response.text)
+    print("Status code:", response.status_code)
+    print("Raw text:", response.text)
     print(f"Latency: {elapsed:.2f} ms")
-try:
-    print("Parsed JSON:", response.json())
-except Exception as e:
-    print("Failed to parse JSON:", str(e))
+    try:
+        print("Parsed JSON:", response.json())
+    except Exception as e:
+        print("Failed to parse JSON:", str(e))
 except requests.exceptions.RequestException as e:
     print("Request failed:", e)
