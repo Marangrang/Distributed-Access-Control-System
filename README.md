@@ -152,7 +152,7 @@ docker compose up --build
 ## Testing
 Run the included test script:
 ```bash
-python verification_service/test_verify.py
+python3 verification_service/test_verify.py
 ```
 - Prints the API response and latency in milliseconds.
 
