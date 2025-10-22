@@ -1,0 +1,42 @@
+# Basic runtime config for the app (override with env vars in production)
+db:
+  host: db
+  port: 5432
+  name: mydb
+  user: myuser
+  password: mypassword
+
+minio:
+  endpoint: http://minio:9000
+  access_key: minioadmin
+  secret_key: minioadmin
+  region: us-east-1
+
+model:
+  embedding_dim: 512
+  similarity_threshold: 0.7
+  backbone: inception_resnet_v1
+  pretrained_source: vggface2
+
+paths:
+  faiss_index: /app/verification_service/faiss_index
+  models: /app/models
+  originals: data/originals
+  thumbnails: verification_service/faiss_index/thumbs
+  embeddings_index: verification_service/faiss_index/driver_vectors.index
+  metadata: verification_service/faiss_index/metadata.json
+
+cloud:
+  minio_endpoint: http://minio:9000
+  pgvector_host: db
+  pgvector_port: 5432
+  pgvector_db: mydb
+  pgvector_user: myuser
+  pgvector_password: mypassword
+
+sync:
+  interval_minutes: 10
+  checkpoint_file: sync_checkpoint.txt
+
+app:
+  uvicorn_workers: 2

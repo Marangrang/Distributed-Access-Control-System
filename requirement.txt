@@ -1,0 +1,11 @@
+torch>=1.13.1
+facenet-pytorch
+fastapi
+uvicorn
+faiss-cpu>=1.7.3
+pillow
+python-multipart
+prometheus-client
+requests
+psycopg2-binary
+scikit-learn
