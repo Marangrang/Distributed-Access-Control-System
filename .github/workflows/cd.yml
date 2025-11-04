@@ -101,10 +101,11 @@ jobs:
           EENV
           EOF
 
-      - name: Remote deploy (Docker Compose)
+      - name: Remote deploy (Docker Compose via ngrok TCP)
         run: |
-          ssh -o StrictHostKeyChecking=no ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }} << 'EOF'
-            cd /opt/face-verification
+          ssh -o StrictHostKeyChecking=no -p ${{ secrets.DEPLOY_PORT }} ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }} << 'EOF'
+            cd /opt/face-verification || mkdir -p /opt/face-verification && cd /opt/face-verification
+            git pull || true
             docker compose pull || true
             docker compose down || true
             docker compose up -d --build
