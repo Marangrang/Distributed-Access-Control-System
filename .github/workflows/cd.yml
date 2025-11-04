@@ -7,8 +7,8 @@ on:
 
 env:
   IMAGE_NAME: ghcr.io/marangrang/distributed-access-control-system:latest
-  DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
-  DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+  DEPLOY_HOST: ${{ secrets.NGROK_HOST }}
+  DEPLOY_PORT: ${{ secrets.NGROK_PORT }}
   DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
 
 jobs:
@@ -56,17 +56,70 @@ jobs:
         with:
           ssh-private-key: ${{ secrets.DEPLOY_SSH_KEY }}
 
-      - name: Deploy via SSH
+      - name: Setup SSH Config
         run: |
-          # Add host key checking exception for first connection
           mkdir -p ~/.ssh
-          echo "[${{ env.DEPLOY_HOST }}]:${{ env.DEPLOY_PORT }} ssh-ed25519 GjbikMMvEnD50cjtp8tQJaLqP7k8TmO9dUDp9zDwPaA" >> ~/.ssh/known_hosts
-          
-          # Deploy using working key and port
-          ssh -p ${{ env.DEPLOY_PORT }} ${{ secrets.DEPLOY_USER }}@${{ env.DEPLOY_HOST }} << 'EOF'
-            # Pull and restart containers
+          cat > ~/.ssh/config << EOF
+          Host deployment
+            HostName ${{ env.DEPLOY_HOST }}
+            Port ${{ env.DEPLOY_PORT }}
+            User ${{ env.DEPLOY_USER }}
+            IdentityFile ~/.ssh/id_ed25519
+            StrictHostKeyChecking accept-new
+            AddressFamily inet
+          EOF
+          chmod 600 ~/.ssh/config
+
+      - name: Verify SSH Connection
+        run: |
+          # Test connection with retries
+          max_attempts=3
+          attempt=1
+          while [ $attempt -le $max_attempts ]; do
+            echo "Connection attempt $attempt of $max_attempts"
+            if ssh -v deployment "echo 'SSH connection successful'"; then
+              echo "✓ SSH connection verified"
+              break
+            fi
+            
+            if [ $attempt -eq $max_attempts ]; then
+              echo "✗ All connection attempts failed"
+              exit 1
+            fi
+            
+            attempt=$((attempt + 1))
+            echo "Retrying in 5 seconds..."
+            sleep 5
+          done
+
+      - name: Deploy Application
+        if: success()
+        run: |
+          ssh deployment << 'EOF'
+            set -e
+            echo "Starting deployment at $(date)"
+            
+            # Verify Docker is running
+            if ! docker info >/dev/null 2>&1; then
+              echo "✗ ERROR: Docker is not running"
+              exit 1
+            fi
+            
+            echo "→ Pulling latest image..."
             docker pull ${{ env.IMAGE_NAME }}
-            docker compose down || true
+            
+            echo "→ Stopping existing containers..."
+            docker compose down --remove-orphans || true
+            
+            echo "→ Starting new containers..."
             docker compose up -d
-            echo "Deployment completed"
+            
+            echo "→ Verifying deployment..."
+            if ! docker compose ps --quiet | grep -q .; then
+              echo "✗ ERROR: No containers running after deployment"
+              exit 1
+            fi
+            
+            echo "✓ Deployment completed successfully at $(date)"
+            docker compose ps
           EOF
