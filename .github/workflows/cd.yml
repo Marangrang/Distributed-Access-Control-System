@@ -6,7 +6,10 @@ on:
   workflow_dispatch:
 
 env:
-  IMAGE_NAME: "ghcr.io/marangrang/distributed-access-control-system:latest"
+  IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/distributed-access-control-system:latest
+  DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
+  DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+  DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
 
 jobs:
   build-and-publish:
@@ -18,12 +21,6 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v2
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
 
       - name: Log in to GHCR
         uses: docker/login-action@v3
@@ -38,8 +35,7 @@ jobs:
           context: .
           file: serve/Dockerfile
           push: true
-          tags: ghcr.io/marangrang/distributed-access-control-system:latest
-          platforms: linux/amd64,linux/arm64
+          tags: ${{ env.IMAGE_NAME }}
 
   deploy:
     needs: build-and-publish
@@ -51,62 +47,17 @@ jobs:
         with:
           ssh-private-key: ${{ secrets.DEPLOY_SSH_KEY }}
 
-      - name: Rsync repo to server
+      - name: Deploy via SSH
         run: |
-          rsync -avz --exclude '.git' . ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}:/opt/face-verification/
-
-      - name: Write environment file remotely
-        run: |
-          ssh -o StrictHostKeyChecking=no ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }} << 'EOF'
-          cat > /opt/face-verification/.env << 'EENV'
-
-          APP_ENV=production
-          APP_DEBUG=false
-
-
-          DB_HOST=${{ secrets.DB_HOST }}
-
-          DB_PORT=5432
-          DB_NAME=${{ secrets.DB_NAME }}
-          DB_USER=${{ secrets.DB_USER }}
-          DB_PASSWORD=${{ secrets.DB_PASSWORD }}
-          DB_SSL_MODE=disable
-
-
-          MINIO_ENDPOINT=${{ secrets.MINIO_ENDPOINT }}
-          MINIO_ACCESS_KEY=${{ secrets.MINIO_ACCESS_KEY }}
-          MINIO_SECRET_KEY=${{ secrets.MINIO_SECRET_KEY }}
-          MINIO_BUCKET=faiss-index
-          MINIO_REGION=us-east-1
-          MINIO_SECURE=true
-
-
-          FAISS_INDEX_PATH=/data/faiss_index
-          EMBEDDING_DIM=768
-          EMBEDDING_DTYPE=float16
-
-
-          UVICORN_HOST=0.0.0.0
-          UVICORN_PORT=8000
-          UVICORN_WORKERS=2
-          LOG_LEVEL=info
-
-
-          JWT_SECRET_KEY=${{ secrets.JWT_SECRET_KEY }}
-          JWT_EXPIRY_HOURS=12
-
-
-          DATA_DIR=/opt/face-verification/data
-          LOG_DIR=/opt/face-verification/logs
-          EENV
-          EOF
-
-      - name: Remote deploy (Docker Compose via ngrok TCP)
-        run: |
-          ssh -o StrictHostKeyChecking=no -p ${{ secrets.DEPLOY_PORT }} ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }} << 'EOF'
-            cd /opt/face-verification || mkdir -p /opt/face-verification && cd /opt/face-verification
-            git pull || true
-            docker compose pull || true
+          # Add host key checking exception for first connection
+          mkdir -p ~/.ssh
+          echo "[${{ env.DEPLOY_HOST }}]:${{ env.DEPLOY_PORT }} ssh-ed25519 GjbikMMvEnD50cjtp8tQJaLqP7k8TmO9dUDp9zDwPaA" >> ~/.ssh/known_hosts
+          
+          # Deploy using working key and port
+          ssh -p ${{ env.DEPLOY_PORT }} ${{ secrets.DEPLOY_USER }}@${{ env.DEPLOY_HOST }} << 'EOF'
+            # Pull and restart containers
+            docker pull ${{ env.IMAGE_NAME }}
             docker compose down || true
-            docker compose up -d --build
+            docker compose up -d
+            echo "Deployment completed"
           EOF
