@@ -7,7 +7,7 @@ on:
 
 env:
   # Convert repository name to lowercase using github.repository_owner | lower
-  IMAGE_NAME: ghcr.io/${{ github.repository_owner | lower }}/distributed-access-control-system:latest
+  IMAGE_NAME: ghcr.io/marangrang/distributed-access-control-system:latest
   DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
   DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
   DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
