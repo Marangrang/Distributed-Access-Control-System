@@ -7,8 +7,8 @@ on:
 
 env:
   IMAGE_NAME: ghcr.io/marangrang/distributed-access-control-system:latest
-  DEPLOY_HOST: ${{ secrets.NGROK_HOST }}
-  DEPLOY_PORT: ${{ secrets.NGROK_PORT }}
+  DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+  DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
   DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
 
 jobs:
@@ -57,99 +57,75 @@ jobs:
             echo "::error::DEPLOY_HOST or DEPLOY_PORT is empty. Check repository secrets."
             exit 1
           fi
-          
-          echo "Deployment target: ${{ env.DEPLOY_HOST }}:${{ env.DEPLOY_PORT }}"
-          
-          # Test basic TCP connectivity first
-          if ! timeout 5 nc -zv ${{ env.DEPLOY_HOST }} ${{ env.DEPLOY_PORT }}; then
-            echo "::error::Cannot connect to ${{ env.DEPLOY_HOST }}:${{ env.DEPLOY_PORT }}"
-            exit 1
-          fi
-      
-      - name: Setup SSH
+          echo "✅ Deployment target: ${{ env.DEPLOY_USER }}@${{ env.DEPLOY_HOST }}:${{ env.DEPLOY_PORT }}"
+          timeout 5 nc -zv ${{ env.DEPLOY_HOST }} ${{ env.DEPLOY_PORT }}
+
+      - name: Setup SSH key
         uses: webfactory/ssh-agent@v0.9.0
         with:
           ssh-private-key: ${{ secrets.DEPLOY_SSH_KEY }}
 
-      - name: Setup SSH Config
+      - name: Configure SSH
         run: |
           mkdir -p ~/.ssh
-          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_ed25519
-          chmod 600 ~/.ssh/id_ed25519
           cat > ~/.ssh/config << EOF
           Host deployment
-            HostName ${{ env.DEPLOY_HOST }}
-            Port ${{ env.DEPLOY_PORT }}
-            User ${{ env.DEPLOY_USER }}
-            IdentityFile ~/.ssh/id_ed25519
-            PubkeyAuthentication yes
-            PasswordAuthentication no
-            StrictHostKeyChecking accept-new
-            LogLevel DEBUG3
-            ConnectTimeout 30
-            ServerAliveInterval 30
-            AddressFamily inet
+          HostName ${{ env.DEPLOY_HOST }}
+          Port ${{ env.DEPLOY_PORT }}
+          User ${{ env.DEPLOY_USER }}
+          StrictHostKeyChecking no
           EOF
           chmod 600 ~/.ssh/config
-          
-          # Show key fingerprint for verification
-          ssh-keygen -lf ~/.ssh/id_ed25519
 
       - name: Verify SSH Connection
         run: |
-          # Test connection with retries
+          echo "🔗 Testing SSH connection with verbose logs..."
           max_attempts=3
           attempt=1
           while [ $attempt -le $max_attempts ]; do
-            echo "Connection attempt $attempt of $max_attempts"
-            if ssh -v deployment "echo 'SSH connection successful'"; then
+           echo "Connection attempt $attempt of $max_attempts"
+            if ssh -vvv deployment "echo 'SSH connection successful ✅'"; then
               echo "✓ SSH connection verified"
               break
             fi
-            
+
             if [ $attempt -eq $max_attempts ]; then
               echo "✗ All connection attempts failed"
               exit 1
             fi
-            
+
             attempt=$((attempt + 1))
             echo "Retrying in 5 seconds..."
             sleep 5
           done
-
-      - name: Test SSH Connection
-        run: |
-          ssh -vvv -p 18391 -i ~/.ssh/id_ed25519 NWUUSER@4.tcp.eu.ngrok.io "echo connected"
-
 
       - name: Deploy Application
         if: success()
         run: |
           ssh deployment << 'EOF'
             set -e
-            echo "Starting deployment at $(date)"
-            
-            # Verify Docker is running
+            echo "🚀 Starting deployment at $(date)"
+
             if ! docker info >/dev/null 2>&1; then
               echo "✗ ERROR: Docker is not running"
               exit 1
             fi
-            
+
             echo "→ Pulling latest image..."
-            docker pull ${{ env.IMAGE_NAME }}
-            
-            echo "→ Stopping existing containers..."
+            docker pull ghcr.io/marangrang/distributed-access-control-system:latest
+
+            echo "→ Stopping and removing old containers..."
             docker compose down --remove-orphans || true
-            
+
             echo "→ Starting new containers..."
             docker compose up -d
-            
+
             echo "→ Verifying deployment..."
             if ! docker compose ps --quiet | grep -q .; then
               echo "✗ ERROR: No containers running after deployment"
               exit 1
             fi
-            
+
             echo "✓ Deployment completed successfully at $(date)"
             docker compose ps
           EOF
