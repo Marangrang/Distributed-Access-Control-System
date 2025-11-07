@@ -51,6 +51,21 @@ jobs:
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/main'
     steps:
+      - name: Validate deploy configuration
+        run: |
+          if [ -z "${{ env.DEPLOY_HOST }}" ] || [ -z "${{ env.DEPLOY_PORT }}" ]; then
+            echo "::error::DEPLOY_HOST or DEPLOY_PORT is empty. Check repository secrets."
+            exit 1
+          fi
+          
+          echo "Deployment target: ${{ env.DEPLOY_HOST }}:${{ env.DEPLOY_PORT }}"
+          
+          # Test basic TCP connectivity first
+          if ! timeout 5 nc -zv ${{ env.DEPLOY_HOST }} ${{ env.DEPLOY_PORT }}; then
+            echo "::error::Cannot connect to ${{ env.DEPLOY_HOST }}:${{ env.DEPLOY_PORT }}"
+            exit 1
+          fi
+      
       - name: Setup SSH
         uses: webfactory/ssh-agent@v0.9.0
         with:
@@ -59,16 +74,26 @@ jobs:
       - name: Setup SSH Config
         run: |
           mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
           cat > ~/.ssh/config << EOF
           Host deployment
             HostName ${{ env.DEPLOY_HOST }}
             Port ${{ env.DEPLOY_PORT }}
             User ${{ env.DEPLOY_USER }}
             IdentityFile ~/.ssh/id_ed25519
+            PubkeyAuthentication yes
+            PasswordAuthentication no
             StrictHostKeyChecking accept-new
+            LogLevel DEBUG3
+            ConnectTimeout 30
+            ServerAliveInterval 30
             AddressFamily inet
           EOF
           chmod 600 ~/.ssh/config
+          
+          # Show key fingerprint for verification
+          ssh-keygen -lf ~/.ssh/id_ed25519
 
       - name: Verify SSH Connection
         run: |
@@ -91,6 +116,11 @@ jobs:
             echo "Retrying in 5 seconds..."
             sleep 5
           done
+
+      - name: Test SSH Connection
+        run: |
+          ssh -vvv -p 18391 -i ~/.ssh/id_ed25519 NWUUSER@4.tcp.eu.ngrok.io "echo connected"
+
 
       - name: Deploy Application
         if: success()
