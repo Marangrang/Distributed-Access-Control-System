@@ -345,7 +345,7 @@ We updated the repo to use an image-first, production-friendly retrieval pipelin
             Host deployment
               HostName ${{ secrets.NGROK_HOST }}
               Port ${{ secrets.NGROK_PORT }}
-              User ${{ secrets.SSH_USER }}
+              User ${{ secrets.DEPLOY_USER }}
               IdentityFile ~/.ssh/id_ed25519
               StrictHostKeyChecking accept-new
             EOF
@@ -373,6 +373,7 @@ We updated the repo to use an image-first, production-friendly retrieval pipelin
 - Notes & next steps
   - If you want to support multi-modal retrieval (text + image), we can add a separate text-embedding pipeline (e.g., BGE or sentence-transformers) and an optional reranker.
   - For large-scale deployment consider HNSW/IVF+PQ plus incremental update tooling (or remote indexing with periodic full index rebuilds).
+
 
 
 

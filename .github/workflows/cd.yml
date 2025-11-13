@@ -54,7 +54,7 @@ jobs:
           Host deployment
             HostName ${{ secrets.NGROK_HOST }}
             Port ${{ secrets.NGROK_PORT }}
-            User ${{ secrets.SSH_USER }}
+            User ${{ secrets.DEPLOY_USER }}
             IdentityFile ~/.ssh/id_ed25519
             StrictHostKeyChecking accept-new
           EOF
