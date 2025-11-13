@@ -6,11 +6,15 @@ on:
   workflow_dispatch:
 
 env:
-  IMAGE_NAME: ghcr.io/marangrang/distributed-access-control-system:latest
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
 
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
@@ -21,9 +25,18 @@ jobs:
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v2
         with:
-          registry: ghcr.io
+          registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          password: ${{ secrets.GHCR_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v4
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=latest
+            type=sha,prefix={{branch}}-
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v4
@@ -31,7 +44,8 @@ jobs:
           context: .
           file: ./serve/Dockerfile
           push: true
-          tags: ${{ env.IMAGE_NAME }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
 
       - name: Deploy to server via SSH
         run: |
@@ -41,29 +55,15 @@ jobs:
           
           cat >> ~/.ssh/config <<EOF
           Host deployment
-            HostName ${{ secrets.NGROK_HOST }}
-            Port ${{ secrets.NGROK_PORT }}
-            User ${{ secrets.SSH_USER }}
+            HostName ${{ secrets.DEPLOY_HOST }}
+            Port ${{ secrets.DEPLOY_PORT }}
+            User ${{ secrets.DEPLOY_USER }}
             IdentityFile ~/.ssh/id_ed25519
             StrictHostKeyChecking accept-new
           EOF
           
           echo "🔗 Testing SSH connection..."
-          for i in {1..3}; do
-            echo "Connection attempt $i of 3"
-            if ssh -vvv deployment "echo '✅ SSH connected'"; then
-              echo "✅ SSH connection successful"
-              break
-            else
-              if [ $i -lt 3 ]; then
-                echo "Retrying in 5 seconds..."
-                sleep 5
-              else
-                echo "❌ All connection attempts failed"
-                exit 1
-              fi
-            fi
-          done
+          ssh deployment "echo '✅ SSH connected'"
           
           echo "🚀 Deploying application..."
-          ssh deployment 'cd "C:\Users\NWUUSER\Documents\deploy SLI\Distributed-Access-Control-System-master"; docker compose pull; docker compose up -d --force-recreate'
+          ssh deployment 'cd "C:\Users\${{ secrets.DEPLOY_USER }}\Documents\deploy SLI\Distributed-Access-Control-System-master"; docker compose pull ghcr.io/marangrang/distributed-access-control-system:latest; docker compose up -d --force-recreate'
