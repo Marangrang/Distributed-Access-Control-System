@@ -27,7 +27,7 @@ jobs:
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
-          password: ${{ secrets.GHCR_TOKEN }}
+          password: ${{ secrets.GHCR_PUSH_TOKEN }}
 
       - name: Extract metadata
         id: meta
@@ -57,7 +57,7 @@ jobs:
           Host deployment
             HostName ${{ secrets.DEPLOY_HOST }}
             Port ${{ secrets.DEPLOY_PORT }}
-            User ${{ secrets.DEPLOY_USER }}
+            User NWUUSER
             IdentityFile ~/.ssh/id_ed25519
             StrictHostKeyChecking accept-new
           EOF
@@ -66,4 +66,4 @@ jobs:
           ssh deployment "echo '✅ SSH connected'"
           
           echo "🚀 Deploying application..."
-          ssh deployment 'cd "C:\Users\${{ secrets.DEPLOY_USER }}\Documents\deploy SLI\Distributed-Access-Control-System-master"; docker compose pull ghcr.io/marangrang/distributed-access-control-system:latest; docker compose up -d --force-recreate'
+          ssh deployment 'cd "C:\Users\NWUUSER\Documents\deploy SLI\Distributed-Access-Control-System-master"; docker compose pull ghcr.io/marangrang/distributed-access-control-system:latest; docker compose up -d --force-recreate'
