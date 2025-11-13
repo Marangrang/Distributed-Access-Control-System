@@ -57,7 +57,7 @@ jobs:
           Host deployment
             HostName ${{ secrets.DEPLOY_HOST }}
             Port ${{ secrets.DEPLOY_PORT }}
-            User ${{ secrets.DEPLOY_USER }}
+            User NWUUSER
             IdentityFile ~/.ssh/id_ed25519
             StrictHostKeyChecking accept-new
           EOF
@@ -66,4 +66,70 @@ jobs:
           ssh deployment "echo '✅ SSH connected'"
 
           echo "🚀 Deploying application..."
-          ssh deployment "powershell.exe -NoProfile -NonInteractive -Command \"\$ErrorActionPreference = 'Stop'; \$docker = (Get-Command docker.exe -ErrorAction SilentlyContinue).Source; if (-not \$docker) { \$docker = 'C:\\Program Files\\Docker\\Docker\\resources\\bin\\docker.exe' }; if (-not (Test-Path \$docker)) { Write-Error 'Docker CLI not found'; exit 1 }; & \$docker version; & \$docker login ghcr.io -u 'Marangrang' -p '${{ secrets.GHCR_PUSH_TOKEN }}'; Set-Location 'C:\\Users\\${{ secrets.DEPLOY_USER }}\\Documents\\deploy SLI\\Distributed-Access-Control-System-master'; \$dcv1 = (Get-Command docker-compose.exe -ErrorAction SilentlyContinue).Source; if (\$dcv1) { & \$dcv1 pull; & \$dcv1 up -d --force-recreate } else { & \$docker compose pull; & \$docker compose up -d --force-recreate }\""
+          ssh deployment 'powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "
+            $ErrorActionPreference = ''Stop'';
+
+            function Find-Docker {
+              $paths = @(
+                ''C:\Program Files\Docker\Docker\resources\bin\docker.exe'',
+                (Get-Command docker.exe -ErrorAction SilentlyContinue).Source
+              ) | Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1
+              return $paths
+            }
+
+            $docker = Find-Docker
+            if (-not $docker) {
+              Write-Warning ''docker.exe not found. Attempting install via winget.'';
+              $winget = (Get-Command winget.exe -ErrorAction SilentlyContinue).Source
+              if (-not $winget) {
+                Write-Error ''winget not available. Install Docker Desktop manually.''
+                exit 1
+              }
+              try {
+                & $winget install -e --id Docker.DockerDesktop --accept-source-agreements --accept-package-agreements
+              } catch {
+                Write-Error ''winget install failed. Install Docker Desktop manually.''
+                exit 1
+              }
+              Start-Sleep 10
+              $docker = Find-Docker
+              if (-not $docker) {
+                Write-Error ''Docker still not found after install attempt.''
+                exit 1
+              }
+              Write-Host ''Docker executable detected: '' $docker
+            }
+
+            Write-Host ''Checking Docker daemon...''
+            $maxWait = 60
+            for ($i=1; $i -le $maxWait; $i++) {
+              try {
+                & $docker version *>$null
+                $daemonOk = $true
+              } catch { $daemonOk = $false }
+              if ($daemonOk) { break }
+              Start-Sleep 2
+            }
+            if (-not $daemonOk) {
+              Write-Error ''Docker daemon not responding. If Docker Desktop was just installed, log into the machine and start it once.''
+              exit 1
+            }
+
+            Write-Host ''Logging into GHCR...''
+            & $docker login ghcr.io -u ''Marangrang'' -p ''${{ secrets.GHCR_PUSH_TOKEN }}''
+
+            Set-Location ''C:\Users\NWUUSER\Documents\deploy SLI\Distributed-Access-Control-System-master''
+
+            $composeV1 = (Get-Command docker-compose.exe -ErrorAction SilentlyContinue)
+            if ($composeV1) {
+              Write-Host ''Using docker-compose (v1)''
+              & $composeV1.Source pull
+              & $composeV1.Source up -d --force-recreate
+            } else {
+              Write-Host ''Using Docker Compose V2''
+              & $docker compose pull
+              & $docker compose up -d --force-recreate
+            }
+
+            Write-Host ''✅ Deployment complete''
+          "'
