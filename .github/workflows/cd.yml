@@ -53,17 +53,17 @@ jobs:
           echo "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
           
-          cat >> ~/.ssh/config <<EOF
+          cat > ~/.ssh/config <<EOF
           Host deployment
             HostName ${{ secrets.DEPLOY_HOST }}
             Port ${{ secrets.DEPLOY_PORT }}
-            User NWUUSER
+            User ${{ secrets.DEPLOY_USER }}
             IdentityFile ~/.ssh/id_ed25519
             StrictHostKeyChecking accept-new
           EOF
-          
+
           echo "🔗 Testing SSH connection..."
           ssh deployment "echo '✅ SSH connected'"
-          
+
           echo "🚀 Deploying application..."
-          ssh deployment 'cd "C:\Users\NWUUSER\Documents\deploy SLI\Distributed-Access-Control-System-master"; docker compose pull ghcr.io/marangrang/distributed-access-control-system:latest; docker compose up -d --force-recreate'
+          ssh deployment "powershell.exe -NoProfile -NonInteractive -Command \"\$ErrorActionPreference = 'Stop'; \$docker = (Get-Command docker.exe -ErrorAction SilentlyContinue).Source; if (-not \$docker) { \$docker = 'C:\\Program Files\\Docker\\Docker\\resources\\bin\\docker.exe' }; if (-not (Test-Path \$docker)) { Write-Error 'Docker CLI not found'; exit 1 }; & \$docker version; & \$docker login ghcr.io -u 'Marangrang' -p '${{ secrets.GHCR_PUSH_TOKEN }}'; Set-Location 'C:\\Users\\${{ secrets.DEPLOY_USER }}\\Documents\\deploy SLI\\Distributed-Access-Control-System-master'; \$dcv1 = (Get-Command docker-compose.exe -ErrorAction SilentlyContinue).Source; if (\$dcv1) { & \$dcv1 pull; & \$dcv1 up -d --force-recreate } else { & \$docker compose pull; & \$docker compose up -d --force-recreate }\""
