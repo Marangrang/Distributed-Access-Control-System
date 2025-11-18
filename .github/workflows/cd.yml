@@ -65,47 +65,47 @@ jobs:
           echo "🔗 Testing SSH connection..."
           ssh deployment "echo '✅ SSH connected'"
 
-          echo "Creating deploy.ps1..."
-          cat > deploy.ps1 <<'PS'
-          $ErrorActionPreference = 'Stop'
+          echo "🚀 Creating and executing deploy script on remote..."
+          ssh deployment "powershell.exe -NoProfile -ExecutionPolicy Bypass -Command \"
+            Set-Content -Path deploy.ps1 -Value @'
+\`$ErrorActionPreference = 'Stop'
 
-          # find docker exe
-          $dockerExe = 'C:\Program Files\Docker\Docker\resources\bin\docker.exe'
-          if (-not (Test-Path $dockerExe)) {
-            $alt = (Get-Command docker.exe -ErrorAction SilentlyContinue).Source
-            if ($alt) { $dockerExe = $alt } else { Write-Error 'docker.exe not found'; exit 1 }
-          }
+Write-Host 'Finding Docker executable...'
+\`$dockerExe = 'C:\Program Files\Docker\Docker\resources\bin\docker.exe'
+if (-not (Test-Path \`$dockerExe)) {
+  \`$alt = (Get-Command docker.exe -ErrorAction SilentlyContinue).Source
+  if (\`$alt) { \`$dockerExe = \`$alt } else { Write-Error 'docker.exe not found'; exit 1 }
+}
 
-          # wait for daemon
-          $ok = $false
-          for ($i=0; $i -lt 30; $i++) {
-            try { & $dockerExe version > $null; $ok = $true; break } catch { Start-Sleep -Seconds 2 }
-          }
-          if (-not $ok) { Write-Error 'Docker daemon not responding'; exit 1 }
+Write-Host 'Waiting for Docker daemon...'
+\`$ok = \`$false
+for (\`$i=0; \`$i -lt 30; \`$i++) {
+  try { & \`$dockerExe version | Out-Null; \`$ok = \`$true; break } catch { Start-Sleep -Seconds 2 }
+}
+if (-not \`$ok) { Write-Error 'Docker daemon not responding'; exit 1 }
 
-          # login to GHCR; token passed as first arg
-          $token = $args[0]
-          if (-not $token) { Write-Error 'GHCR token not provided'; exit 1 }
-          & $dockerExe login ghcr.io -u 'Marangrang' -p $token
+Write-Host 'Logging into GHCR...'
+\`$token = '${{ secrets.GHCR_PUSH_TOKEN }}'
+& \`$dockerExe login ghcr.io -u 'Marangrang' -p \`$token
 
-          # change to project dir and deploy
-          Set-Location 'C:\Users\NWUUSER\Documents\deploy SLI\Distributed-Access-Control-System-master'
-          $composeV1 = (Get-Command docker-compose.exe -ErrorAction SilentlyContinue)
-          if ($composeV1) {
-            & $composeV1.Source pull
-            & $composeV1.Source up -d --force-recreate
-          } else {
-            & $dockerExe compose pull
-            & $dockerExe compose up -d --force-recreate
-          }
+Write-Host 'Changing to project directory...'
+Set-Location 'C:\Users\NWUUSER\Documents\deploy SLI\Distributed-Access-Control-System-master'
 
-          Write-Host '✅ Deployment complete'
-          PS
+Write-Host 'Pulling and starting containers...'
+\`$composeV1 = (Get-Command docker-compose.exe -ErrorAction SilentlyContinue)
+if (\`$composeV1) {
+  & \`$composeV1.Source pull
+  & \`$composeV1.Source up -d --force-recreate
+} else {
+  & \`$dockerExe compose pull
+  & \`$dockerExe compose up -d --force-recreate
+}
 
-          echo "Uploading deploy.ps1 to remote..."
-          scp -F ~/.ssh/config -i ~/.ssh/id_ed25519 deploy.ps1 deployment:deploy.ps1
+Write-Host '✅ Deployment complete'
+'@
+            
+            Write-Host 'Executing deployment script...'
+            & powershell.exe -NoProfile -ExecutionPolicy Bypass -File deploy.ps1
+          \""
 
-          echo "Executing deploy.ps1 on remote..."
-          ssh deployment "powershell.exe -NoProfile -ExecutionPolicy Bypass -File $env:USERPROFILE\\deploy.ps1 '${{ secrets.GHCR_PUSH_TOKEN }}'"
-
-          echo "Done."
+          echo "✅ Done."
