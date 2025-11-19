@@ -57,11 +57,9 @@ jobs:
           # Validate key format
           if ! ssh-keygen -l -f ~/.ssh/id_ed25519 > /dev/null 2>&1; then
             echo "❌ SSH key is invalid or corrupted"
-            echo "Key content preview (first line):"
-            head -n 1 ~/.ssh/id_ed25519
             exit 1
           fi
-          echo "✅ SSH key validated GOOD TO GO"
+          echo "✅ SSH key validated"
 
           cat > ~/.ssh/config <<EOF
           Host deployment
@@ -73,7 +71,13 @@ jobs:
           EOF
 
           echo "🔗 Testing SSH connection..."
-          ssh deployment 'echo ✅ SSH connected'
+          ssh -o BatchMode=yes -o ConnectTimeout=10 deployment 'echo ✅ SSH connected' || {
+            echo "❌ SSH connection failed - check if:"
+            echo "  1. Public key is in C:\Users\NWUUSER\.ssh\authorized_keys on Windows"
+            echo "  2. Permissions are correct (NWUUSER and SYSTEM only)"
+            echo "  3. DEPLOY_HOST and DEPLOY_PORT secrets are up to date"
+            exit 1
+          }
 
-          echo "🚀 Deploying..."
-          ssh deployment 'powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference = ''Stop''; $docker = ''C:\Program Files\Docker\Docker\resources\bin\docker.exe''; if (-not (Test-Path $docker)) { $alt = (Get-Command docker.exe -ErrorAction SilentlyContinue).Source; if ($alt) { $docker = $alt } else { Write-Error ''docker.exe not found''; exit 1 } }; $ok=$false; for ($i=0; $i -lt 30; $i++) { try { & $docker version | Out-Null; $ok=$true; break } catch { Start-Sleep -Seconds 2 } }; if (-not $ok) { Write-Error ''Docker daemon not responding''; exit 1 }; & $docker login ghcr.io -u ''Marangrang'' -p ''${{ secrets.GHCR_PUSH_TOKEN }}''; Set-Location ''C:\Users\NWUUSER\Documents\deploy SLI\Distributed-Access-Control-System-master''; $dcv1 = (Get-Command docker-compose.exe -ErrorAction SilentlyContinue).Source; if ($dcv1) { & $dcv1 pull; & $dcv1 up -d --force-recreate } else { & $docker compose pull; & $docker compose up -d --force-recreate }"'
+          echo "🚀 Deploying via script..."
+          ssh deployment "powershell -NoProfile -ExecutionPolicy Bypass -File 'C:\Users\NWUUSER\Documents\deploy SLI\Distributed-Access-Control-System-master\deploy.ps1' '${{ secrets.GHCR_PUSH_TOKEN }}'"
