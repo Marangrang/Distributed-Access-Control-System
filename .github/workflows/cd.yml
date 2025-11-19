@@ -61,7 +61,7 @@ jobs:
             head -n 1 ~/.ssh/id_ed25519
             exit 1
           fi
-          echo "✅ SSH key validated"
+          echo "✅ SSH key validated GOOD TO GO"
 
           cat > ~/.ssh/config <<EOF
           Host deployment
