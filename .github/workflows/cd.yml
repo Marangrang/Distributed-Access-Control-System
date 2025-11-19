@@ -54,30 +54,37 @@ jobs:
           echo "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
           
-          # Validate key format
+          # Validate key
           if ! ssh-keygen -l -f ~/.ssh/id_ed25519 > /dev/null 2>&1; then
             echo "❌ SSH key is invalid or corrupted"
             exit 1
           fi
           echo "✅ SSH key validated"
-
+          
+          # Create SSH config
           cat > ~/.ssh/config <<EOF
           Host deployment
             HostName ${{ secrets.DEPLOY_HOST }}
             Port ${{ secrets.DEPLOY_PORT }}
-            User NWUUSER
+            User ${{ secrets.DEPLOY_USER }}
             IdentityFile ~/.ssh/id_ed25519
             StrictHostKeyChecking accept-new
+            ServerAliveInterval 60
+            ServerAliveCountMax 10
           EOF
 
-          echo "🔗 Testing SSH connection..."
-          ssh -o BatchMode=yes -o ConnectTimeout=10 deployment 'echo ✅ SSH connected' || {
-            echo "❌ SSH connection failed - check if:"
-            echo "  1. Public key is in C:\Users\NWUUSER\.ssh\authorized_keys on Windows"
-            echo "  2. Permissions are correct (NWUUSER and SYSTEM only)"
-            echo "  3. DEPLOY_HOST and DEPLOY_PORT secrets are up to date"
+          echo "=== DNS / TCP check ==="
+          echo "Host: ${{ secrets.DEPLOY_HOST }} Port: ${{ secrets.DEPLOY_PORT }}"
+          nslookup "${{ secrets.DEPLOY_HOST }}" || true
+          timeout 10 bash -c "cat < /dev/tcp/${{ secrets.DEPLOY_HOST }}/${{ secrets.DEPLOY_PORT }}" >/dev/null 2>&1 && echo "✅ TCP connection successful" || echo "❌ TCP connection failed"
+
+          echo "=== SSH verbose test ==="
+          ssh -vvv -o BatchMode=yes -o ConnectTimeout=20 deployment "echo '✅ SSH connected'" || {
+            echo "❌ SSH failed — check logs above"
             exit 1
           }
 
           echo "🚀 Deploying via script..."
           ssh deployment "powershell -NoProfile -ExecutionPolicy Bypass -File 'C:\Users\NWUUSER\Documents\deploy SLI\Distributed-Access-Control-System-master\deploy.ps1' '${{ secrets.GHCR_PUSH_TOKEN }}'"
+          
+          echo "✅ Deployment complete"
