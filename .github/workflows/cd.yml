@@ -53,6 +53,15 @@ jobs:
           mkdir -p ~/.ssh
           echo "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
+          
+          # Validate key format
+          if ! ssh-keygen -l -f ~/.ssh/id_ed25519 > /dev/null 2>&1; then
+            echo "❌ SSH key is invalid or corrupted"
+            echo "Key content preview (first line):"
+            head -n 1 ~/.ssh/id_ed25519
+            exit 1
+          fi
+          echo "✅ SSH key validated"
 
           cat > ~/.ssh/config <<EOF
           Host deployment
