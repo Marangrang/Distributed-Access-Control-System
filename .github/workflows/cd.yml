@@ -51,7 +51,7 @@ jobs:
         shell: bash
         run: |
           mkdir -p ~/.ssh
-          printf "%s" "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/id_ed25519
+          echo "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
 
           cat > ~/.ssh/config <<EOF
