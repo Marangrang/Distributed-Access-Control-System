@@ -48,9 +48,10 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
 
       - name: Deploy to server via SSH
+        shell: bash
         run: |
           mkdir -p ~/.ssh
-          echo "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/id_ed25519
+          printf "%s" "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
 
           cat > ~/.ssh/config <<EOF
@@ -63,49 +64,7 @@ jobs:
           EOF
 
           echo "🔗 Testing SSH connection..."
-          ssh deployment "echo '✅ SSH connected'"
+          ssh deployment 'echo ✅ SSH connected'
 
-          echo "🚀 Creating and executing deploy script on remote..."
-          ssh deployment "powershell.exe -NoProfile -ExecutionPolicy Bypass -Command \"
-            Set-Content -Path deploy.ps1 -Value @'
-\`$ErrorActionPreference = 'Stop'
-
-Write-Host 'Finding Docker executable...'
-\`$dockerExe = 'C:\Program Files\Docker\Docker\resources\bin\docker.exe'
-if (-not (Test-Path \`$dockerExe)) {
-  \`$alt = (Get-Command docker.exe -ErrorAction SilentlyContinue).Source
-  if (\`$alt) { \`$dockerExe = \`$alt } else { Write-Error 'docker.exe not found'; exit 1 }
-}
-
-Write-Host 'Waiting for Docker daemon...'
-\`$ok = \`$false
-for (\`$i=0; \`$i -lt 30; \`$i++) {
-  try { & \`$dockerExe version | Out-Null; \`$ok = \`$true; break } catch { Start-Sleep -Seconds 2 }
-}
-if (-not \`$ok) { Write-Error 'Docker daemon not responding'; exit 1 }
-
-Write-Host 'Logging into GHCR...'
-\`$token = '${{ secrets.GHCR_PUSH_TOKEN }}'
-& \`$dockerExe login ghcr.io -u 'Marangrang' -p \`$token
-
-Write-Host 'Changing to project directory...'
-Set-Location 'C:\Users\NWUUSER\Documents\deploy SLI\Distributed-Access-Control-System-master'
-
-Write-Host 'Pulling and starting containers...'
-\`$composeV1 = (Get-Command docker-compose.exe -ErrorAction SilentlyContinue)
-if (\`$composeV1) {
-  & \`$composeV1.Source pull
-  & \`$composeV1.Source up -d --force-recreate
-} else {
-  & \`$dockerExe compose pull
-  & \`$dockerExe compose up -d --force-recreate
-}
-
-Write-Host '✅ Deployment complete'
-'@
-            
-            Write-Host 'Executing deployment script...'
-            & powershell.exe -NoProfile -ExecutionPolicy Bypass -File deploy.ps1
-          \""
-
-          echo "✅ Done."
+          echo "🚀 Deploying..."
+          ssh deployment 'powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference = ''Stop''; $docker = ''C:\Program Files\Docker\Docker\resources\bin\docker.exe''; if (-not (Test-Path $docker)) { $alt = (Get-Command docker.exe -ErrorAction SilentlyContinue).Source; if ($alt) { $docker = $alt } else { Write-Error ''docker.exe not found''; exit 1 } }; $ok=$false; for ($i=0; $i -lt 30; $i++) { try { & $docker version | Out-Null; $ok=$true; break } catch { Start-Sleep -Seconds 2 } }; if (-not $ok) { Write-Error ''Docker daemon not responding''; exit 1 }; & $docker login ghcr.io -u ''Marangrang'' -p ''${{ secrets.GHCR_PUSH_TOKEN }}''; Set-Location ''C:\Users\NWUUSER\Documents\deploy SLI\Distributed-Access-Control-System-master''; $dcv1 = (Get-Command docker-compose.exe -ErrorAction SilentlyContinue).Source; if ($dcv1) { & $dcv1 pull; & $dcv1 up -d --force-recreate } else { & $docker compose pull; & $docker compose up -d --force-recreate }"'
