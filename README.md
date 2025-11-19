@@ -343,8 +343,8 @@ We updated the repo to use an image-first, production-friendly retrieval pipelin
             
             cat >> ~/.ssh/config <<EOF
             Host deployment
-              HostName ${{ secrets.NGROK_HOST }}
-              Port ${{ secrets.NGROK_PORT }}
+              HostName ${{ secrets.DEPLOY_HOST }}
+              Port ${{ secrets.DEPLOY_PORT }}
               User ${{ secrets.DEPLOY_USER }}
               IdentityFile ~/.ssh/id_ed25519
               StrictHostKeyChecking accept-new
