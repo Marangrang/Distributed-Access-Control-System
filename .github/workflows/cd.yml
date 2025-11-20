@@ -69,7 +69,7 @@ jobs:
             tail -n 1 ~/.ssh/id_ed25519
             exit 1
           fi
-          echo "✅ SSH key validated"
+          echo "✅ SSH key validated "
           echo "Key fingerprint:"
           ssh-keygen -l -f ~/.ssh/id_ed25519
           echo "Key type:"
