@@ -10,6 +10,14 @@ env:
   IMAGE_NAME: ${{ github.repository }}
 
 jobs:
+  build:
+    runs-on: self-hosted
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+      - name: Run a script
+        run: echo "Hello from self-hosted runner!"
+
   build-and-deploy:
     runs-on: ubuntu-latest
     permissions:
