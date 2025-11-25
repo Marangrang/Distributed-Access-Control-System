@@ -10,16 +10,8 @@ env:
   IMAGE_NAME: ${{ github.repository }}
 
 jobs:
-  build:
-    runs-on: self-hosted
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v2
-      - name: Run a script
-        run: echo "Hello from self-hosted runner!!"
-
   build-and-deploy:
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     permissions:
       contents: read
       packages: write
@@ -55,114 +47,45 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
 
-      - name: Deploy to server via SSH
-        shell: bash
+      - name: Deploy Application Locally
+        shell: powershell
         run: |
-          echo "=================================================="
-          echo "🔧 DEPLOYMENT SETUP"
-          echo "=================================================="
+          Write-Host "=================================================="
+          Write-Host "🚀 DEPLOYING APPLICATION"
+          Write-Host "=================================================="
           
-          mkdir -p ~/.ssh
-          echo "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/id_ed25519
-          chmod 600 ~/.ssh/id_ed25519
+          # Navigate to project directory
+          Set-Location "C:\Users\NWUUSER\Documents\deploy SLI\Distributed-Access-Control-System-master"
           
-          echo ""
-          echo "📋 SSH Key Information:"
-          # Validate key
-          if ! ssh-keygen -l -f ~/.ssh/id_ed25519 > /dev/null 2>&1; then
-            echo "❌ SSH key is invalid or corrupted"
-            echo "Key begins with:"
-            head -n 1 ~/.ssh/id_ed25519
-            echo "Key ends with:"
-            tail -n 1 ~/.ssh/id_ed25519
-            exit 1
-          fi
-          echo "✅ SSH key validated "
-          echo "Key fingerprint:"
-          ssh-keygen -l -f ~/.ssh/id_ed25519
-          echo "Key type:"
-          ssh-keygen -l -f ~/.ssh/id_ed25519 | awk '{print $4}'
+          Write-Host ""
+          Write-Host "📦 Logging into GitHub Container Registry..."
+          echo "${{ secrets.GHCR_PUSH_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
           
-          echo ""
-          echo "📋 Deployment Target:"
-          echo "  Host: ${{ secrets.DEPLOY_HOST }}"
-          echo "  Port: ${{ secrets.DEPLOY_PORT }}"
-          echo "  User: ${{ secrets.DEPLOY_USER }}"
+          Write-Host ""
+          Write-Host "📥 Pulling latest Docker images..."
+          docker-compose pull
           
-          # Create SSH config
-          cat > ~/.ssh/config <<EOF
-          Host deployment
-            HostName ${{ secrets.DEPLOY_HOST }}
-            Port ${{ secrets.DEPLOY_PORT }}
-            User ${{ secrets.DEPLOY_USER }}
-            IdentityFile ~/.ssh/id_ed25519
-            StrictHostKeyChecking accept-new
-            ServerAliveInterval 60
-            ServerAliveCountMax 10
-            ConnectTimeout 60
-            ConnectionAttempts 3
-            TCPKeepAlive yes
-          EOF
-
-          echo ""
-          echo "=================================================="
-          echo "🌐 NETWORK CONNECTIVITY TESTS"
-          echo "=================================================="
+          Write-Host ""
+          Write-Host "🔄 Stopping old containers..."
+          docker-compose down
           
-          echo ""
-          echo "📡 DNS Resolution:"
-          nslookup "${{ secrets.DEPLOY_HOST }}" || echo "⚠️  DNS lookup failed"
+          Write-Host ""
+          Write-Host "🚀 Starting new containers..."
+          docker-compose up -d
           
-          echo ""
-          echo "🔌 TCP Connection Test:"
-          if timeout 10 bash -c "cat < /dev/tcp/${{ secrets.DEPLOY_HOST }}/${{ secrets.DEPLOY_PORT }}" >/dev/null 2>&1; then
-            echo "✅ TCP connection successful to ${{ secrets.DEPLOY_HOST }}:${{ secrets.DEPLOY_PORT }}"
-          else
-            echo "❌ TCP connection failed to ${{ secrets.DEPLOY_HOST }}:${{ secrets.DEPLOY_PORT }}"
-            echo "Possible causes:"
-            echo "  - ngrok tunnel is not running"
-            echo "  - DEPLOY_HOST or DEPLOY_PORT secrets are outdated"
-            echo "  - Firewall blocking connection"
-            exit 1
-          fi
+          Write-Host ""
+          Write-Host "⏳ Waiting for containers to be healthy..."
+          Start-Sleep -Seconds 10
           
-          echo ""
-          echo "🔑 Testing SSH key authentication:"
-          timeout 60 ssh -vvv -o BatchMode=yes -o ConnectTimeout=60 deployment "echo '✅ SSH authentication successful'" 2>&1 | tee /tmp/ssh_verbose.log || {
-            echo ""
-            echo "❌ SSH connection failed"
-            echo ""
-            echo "📊 Connection Summary:"
-            grep -E "debug1:|Authenticated|Permission denied|Connection timed out|Connection refused" /tmp/ssh_verbose.log || echo "No specific error found in SSH debug output"
-            echo ""
-            echo "💡 Troubleshooting steps:"
-            echo "  1. Verify ngrok is running: Invoke-RestMethod http://127.0.0.1:4040/api/tunnels"
-            echo "  2. Check public key in Windows: Get-Content C:\Users\NWUUSER\.ssh\authorized_keys"
-            echo "  3. Verify SSH server running: Get-Service sshd"
-            echo "  4. Check SSH logs: Get-Content C:\ProgramData\ssh\logs\sshd.log -Tail 50"
-            exit 1
-          }
-
-          echo ""
-          echo "=================================================="
-          echo "🚀 DEPLOYING APPLICATION"
-          echo "=================================================="
+          Write-Host ""
+          Write-Host "📊 Container status:"
+          docker-compose ps
           
-          echo ""
-          echo "📦 Pulling latest images and restarting containers..."
-          ssh deployment "powershell -NoProfile -ExecutionPolicy Bypass -File 'C:\Users\NWUUSER\Documents\deploy SLI\Distributed-Access-Control-System-master\deploy.ps1' '${{ secrets.GHCR_PUSH_TOKEN }}'" 2>&1 | while IFS= read -r line; do
-            echo "  [REMOTE] $line"
-          done
+          Write-Host ""
+          Write-Host "📜 Recent logs:"
+          docker-compose logs --tail=20
           
-          if [ ${PIPESTATUS[0]} -eq 0 ]; then
-            echo ""
-            echo "=================================================="
-            echo "✅ DEPLOYMENT COMPLETED SUCCESSFULLY"
-            echo "=================================================="
-          else
-            echo ""
-            echo "=================================================="
-            echo "❌ DEPLOYMENT FAILED"
-            echo "=================================================="
-            exit 1
-          fi
+          Write-Host ""
+          Write-Host "=================================================="
+          Write-Host "✅ DEPLOYMENT COMPLETED SUCCESSFULLY"
+          Write-Host "=================================================="
