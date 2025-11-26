@@ -18,7 +18,7 @@ jobs:
         shell: powershell
         run: |
           Write-Host "=================================================="
-          Write-Host "🔨 BUILDING DOCKER IMAGE"
+          Write-Host "BUILDING DOCKER IMAGE"
           Write-Host "=================================================="
           
           $SHORT_SHA = "${{ github.sha }}".Substring(0, 7)
@@ -26,46 +26,50 @@ jobs:
           Write-Host "Building image with tag: latest and $SHORT_SHA"
           Write-Host ""
           
-          docker build -f ./serve/Dockerfile `
-            -t face-verification-service:latest `
-            -t face-verification-service:$SHORT_SHA `
-            .
+          docker build -f ./serve/Dockerfile -t face-verification-service:latest -t face-verification-service:$SHORT_SHA .
           
           if ($LASTEXITCODE -ne 0) {
-            Write-Host "❌ Docker build failed"
+            Write-Host "ERROR: Docker build failed"
             exit 1
           }
           
           Write-Host ""
-          Write-Host "✅ Build completed successfully"
+          Write-Host "SUCCESS: Build completed successfully"
 
       - name: Deploy Application
         shell: powershell
         run: |
           Write-Host "=================================================="
-          Write-Host "🚀 DEPLOYING APPLICATION"
+          Write-Host "DEPLOYING APPLICATION"
           Write-Host "=================================================="
           
           Set-Location "C:\Users\NWUUSER\Documents\deploy SLI\Distributed-Access-Control-System-master"
           
-          Write-Host "`n🔄 Stopping old containers..."
+          Write-Host ""
+          Write-Host "Stopping old containers..."
           docker-compose down
           
-          Write-Host "`n🚀 Starting new containers..."
+          Write-Host ""
+          Write-Host "Starting new containers..."
           docker-compose up -d --build
           
-          Write-Host "`n⏳ Waiting for containers to start..."
+          Write-Host ""
+          Write-Host "Waiting for containers to start..."
           Start-Sleep -Seconds 15
           
-          Write-Host "`n📊 Container status:"
+          Write-Host ""
+          Write-Host "Container status:"
           docker-compose ps
           
-          Write-Host "`n🔍 Checking container health:"
+          Write-Host ""
+          Write-Host "Checking container health:"
           docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
           
-          Write-Host "`n📜 Recent logs:"
+          Write-Host ""
+          Write-Host "Recent logs:"
           docker-compose logs --tail=30
           
-          Write-Host "`n=================================================="
-          Write-Host "✅ DEPLOYMENT COMPLETED SUCCESSFULLY"
+          Write-Host ""
+          Write-Host "=================================================="
+          Write-Host "SUCCESS: DEPLOYMENT COMPLETED"
           Write-Host "=================================================="
