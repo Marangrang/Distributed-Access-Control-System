@@ -2,6 +2,7 @@ FROM python:3.9-slim
 
 WORKDIR /app
 
+# Install system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     libgl1 \
@@ -9,30 +10,27 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements and install
+# Copy requirements
 COPY requirement.txt /app/requirement.txt
 
-# Install torch separately (uncomment / adjust version for CUDA images if needed)
-RUN pip install --no-cache-dir --default-timeout=120 --retries=10 torch
+# Upgrade pip and install wheel
+RUN pip install --no-cache-dir --upgrade pip setuptools wheel
 
-# Install remaining requirements
-RUN pip install --no-cache-dir --default-timeout=120 --retries=10 -r /app/requirement.txt
+# Install PyTorch without hash verification
+RUN pip install --no-cache-dir --default-timeout=300 --retries=10 --trusted-host pypi.org --trusted-host files.pythonhosted.org torch
 
-# copy app code into image
-COPY . /app
+# Install other requirements
+RUN pip install --no-cache-dir --default-timeout=300 --retries=10 -r requirement.txt
 
-# Ensure runtime dirs
-RUN mkdir -p /app/verification_service/faiss_index/thumbs /app/models
+# Copy application code
+COPY verification_service /app/verification_service
+COPY serve/entrypoint.sh /app/entrypoint.sh
 
-# copy entrypoint and make executable
-COPY serve/entrypoint.sh /usr/local/bin/entrypoint.sh
-RUN chmod +x /usr/local/bin/entrypoint.sh
+# Make entrypoint executable
+RUN chmod +x /app/entrypoint.sh
 
-ENV UVICORN_WORKERS=2
+# Expose port
+EXPOSE 8000
 
-# Expose port used by Gunicorn/Uvicorn
-EXPOSE 8080
-
-# Use Gunicorn + Uvicorn worker, read gunicorn config from config/gunicorn.conf.py
-ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
-CMD ["gunicorn", "-c", "/app/config/gunicorn.conf.py", "serve.wsgi:app"]
+# Set entrypoint
+ENTRYPOINT ["/app/entrypoint.sh"]
