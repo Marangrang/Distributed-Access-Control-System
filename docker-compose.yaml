@@ -34,7 +34,9 @@ services:
   app:
     build:
       context: .
-      dockerfile: serve/Dockerfile
+      dockerfile: ./serve/Dockerfile
+    image: face-verification-service:latest
+    container_name: face-verification-service
     working_dir: /app
     env_file:
       - ./serve/.env
