@@ -33,7 +33,7 @@ jobs:
           $TAG_SHA = "${IMAGE}:main-${SHORT_SHA}"
           
           Write-Host "=================================================="
-          Write-Host "🔨 BUILDING DOCKER IMAGE"
+          Write-Host "🔨 BUILDING DOCKER IMAGE "
           Write-Host "=================================================="
           Write-Host "Image: $TAG_LATEST"
           Write-Host "Tag:   $TAG_SHA"
