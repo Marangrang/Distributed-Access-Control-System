@@ -1,45 +1,35 @@
-name: CD - Build, Publish and Deploy
+name: CD - Build and Deploy Locally
 
 on:
   push:
     branches: [ main ]
   workflow_dispatch:
 
-env:
-  REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
-
 jobs:
   build-and-deploy:
     runs-on: self-hosted
     permissions:
       contents: read
-      packages: write
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
 
-      - name: Log in to GitHub Container Registry
+      - name: Build Docker image locally
         shell: powershell
         run: |
-          echo "${{ secrets.GHCR_PUSH_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
-
-      - name: Build and push Docker image
-        shell: powershell
-        run: |
-          $IMAGE = "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}".ToLower()
-          $TAG_LATEST = "${IMAGE}:latest"
-          $SHORT_SHA = "${{ github.sha }}".Substring(0, 7)
-          $TAG_SHA = "${IMAGE}:main-${SHORT_SHA}"
+          Write-Host "=================================================="
+          Write-Host "🔨 BUILDING DOCKER IMAGE"
+          Write-Host "=================================================="
           
-          Write-Host "=================================================="
-          Write-Host "🔨 BUILDING DOCKER IMAGE "
-          Write-Host "=================================================="
-          Write-Host "Image: $TAG_LATEST"
-          Write-Host "Tag:   $TAG_SHA"
+          $SHORT_SHA = "${{ github.sha }}".Substring(0, 7)
+          
+          Write-Host "Building image with tag: latest and $SHORT_SHA"
           Write-Host ""
           
-          docker build -f ./serve/Dockerfile -t $TAG_LATEST -t $TAG_SHA .
+          docker build -f ./serve/Dockerfile `
+            -t face-verification-service:latest `
+            -t face-verification-service:$SHORT_SHA `
+            .
           
           if ($LASTEXITCODE -ne 0) {
             Write-Host "❌ Docker build failed"
@@ -47,18 +37,9 @@ jobs:
           }
           
           Write-Host ""
-          Write-Host "📤 Pushing to GitHub Container Registry..."
-          docker push $TAG_LATEST
-          docker push $TAG_SHA
-          
-          if ($LASTEXITCODE -ne 0) {
-            Write-Host "❌ Docker push failed"
-            exit 1
-          }
-          
-          Write-Host "✅ Build and push completed"
+          Write-Host "✅ Build completed successfully"
 
-      - name: Deploy Application Locally
+      - name: Deploy Application
         shell: powershell
         run: |
           Write-Host "=================================================="
@@ -67,23 +48,23 @@ jobs:
           
           Set-Location "C:\Users\NWUUSER\Documents\deploy SLI\Distributed-Access-Control-System-master"
           
-          Write-Host "`n📥 Pulling latest Docker images..."
-          docker-compose pull
-          
           Write-Host "`n🔄 Stopping old containers..."
           docker-compose down
           
           Write-Host "`n🚀 Starting new containers..."
-          docker-compose up -d
+          docker-compose up -d --build
           
-          Write-Host "`n⏳ Waiting for containers to be healthy..."
-          Start-Sleep -Seconds 10
+          Write-Host "`n⏳ Waiting for containers to start..."
+          Start-Sleep -Seconds 15
           
           Write-Host "`n📊 Container status:"
           docker-compose ps
           
+          Write-Host "`n🔍 Checking container health:"
+          docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+          
           Write-Host "`n📜 Recent logs:"
-          docker-compose logs --tail=20
+          docker-compose logs --tail=30
           
           Write-Host "`n=================================================="
           Write-Host "✅ DEPLOYMENT COMPLETED SUCCESSFULLY"
