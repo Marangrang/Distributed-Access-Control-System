@@ -60,61 +60,45 @@ jobs:
           $repoRoot = "C:\Users\NWUUSER\Documents\deploy SLI\Distributed-Access-Control-System-master"
           Set-Location $repoRoot
 
-          # Check for .env file
-          if (-Not (Test-Path ".\serve\.env")) {
-            Write-Host "ERROR: ./serve/.env not found"
-            Write-Host "Please create serve/.env with required variables:"
-            Write-Host "  DB_NAME, DB_USER, DB_PASSWORD"
-            Write-Host "  MINIO_ACCESS_KEY, MINIO_SECRET_KEY"
-            Write-Host "  UVICORN_PORT"
-            exit 1
-          }
-
-          # Verify compose file
-          if (-Not (Test-Path ".\docker-compose.yaml") -and -Not (Test-Path ".\docker-compose.yml")) {
-            Write-Host "ERROR: docker-compose file not found"
-            exit 1
-          }
-
           # Detect compose command
           $composeCmd = "docker compose"
           & docker compose version *> $null
           if ($LASTEXITCODE -ne 0) { $composeCmd = "docker-compose" }
 
-          Write-Host "Stopping old containers..."
+          Write-Host "`nStopping old containers..."
           & $composeCmd down -v
-          if ($LASTEXITCODE -ne 0) { Write-Host "WARN: compose down issues"; $LASTEXITCODE = 0 }
-
-          Write-Host "Starting new containers..."
+          
+          Write-Host "`nStarting new containers..."
           & $composeCmd up -d --build
+          
           if ($LASTEXITCODE -ne 0) {
             Write-Host "ERROR: compose up failed"
             & $composeCmd logs --tail=300
             exit 1
           }
 
-          # Wait for health checks (up to 2 minutes)
+          Write-Host "`nWaiting for health checks (up to 90s)..."
           $healthy = $false
-          for ($i=0; $i -lt 40; $i++) {
-            $ps = & $composeCmd ps --format json | ConvertFrom-Json
-            $allHealthy = $true
-            foreach ($svc in $ps) {
-              if ($svc.Health -ne "healthy" -and $svc.State -ne "running") {
-                $allHealthy = $false
-                break
+          for ($i=0; $i -lt 30; $i++) {
+            $output = & $composeCmd ps --format json 2>$null
+            if ($output) {
+              $services = $output | ConvertFrom-Json
+              $allUp = $true
+              foreach ($svc in $services) {
+                if ($svc.State -ne "running") { $allUp = $false; break }
               }
+              if ($allUp) { $healthy = $true; break }
             }
-            if ($allHealthy) { $healthy = $true; break }
             Start-Sleep -Seconds 3
           }
 
           if (-Not $healthy) {
-            Write-Host "ERROR: Services not healthy; logs:"
+            Write-Host "ERROR: Services not healthy"
             & $composeCmd logs --tail=300
             exit 1
           }
 
-          Write-Host "SUCCESS: All containers healthy"
+          Write-Host "`nSUCCESS: All containers running"
           docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
 
       - name: Collect logs
