@@ -15,44 +15,45 @@ concurrency:
 jobs:
   build-and-deploy:
     runs-on: self-hosted
-    timeout-minutes: 40
+    timeout-minutes: 90  # Increased timeout
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Verify Docker and docker-compose
+      - name: Verify Docker
         shell: powershell
         run: |
-          Write-Host "Pre-flight checks"
           docker version | Out-Host
           if ($LASTEXITCODE -ne 0) { Write-Host "ERROR: Docker not available"; exit 1 }
-          
-          # Check for docker compose plugin
-          docker compose version 2>&1 | Out-Host
-          if ($LASTEXITCODE -ne 0) {
-            Write-Host "docker compose plugin not found; trying legacy docker-compose"
-            docker-compose --version | Out-Host
-            if ($LASTEXITCODE -ne 0) { Write-Host "ERROR: docker-compose not available"; exit 1 }
-          }
 
       - name: Optional pre-clean
         shell: powershell
         run: |
           docker system prune -f
-          docker builder prune -a -f
+          docker builder prune --filter "until=72h" -f
 
-      - name: Build Docker image locally
+      - name: Build Docker image with cache
         shell: powershell
         run: |
           Write-Host "=================================================="
           Write-Host "BUILDING DOCKER IMAGE"
           Write-Host "=================================================="
           $SHORT_SHA = "${{ github.sha }}".Substring(0, 7)
-          docker build -f ./serve/Dockerfile -t face-verification-service:latest -t face-verification-service:$SHORT_SHA .
+          
+          # Use BuildKit with inline cache
+          $env:DOCKER_BUILDKIT = "1"
+          docker build `
+            --cache-from face-verification-service:latest `
+            --build-arg BUILDKIT_INLINE_CACHE=1 `
+            -f ./serve/Dockerfile `
+            -t face-verification-service:latest `
+            -t face-verification-service:$SHORT_SHA `
+            .
+          
           if ($LASTEXITCODE -ne 0) { Write-Host "ERROR: Docker build failed"; exit 1 }
           Write-Host "SUCCESS: Build completed"
 
-      - name: Deploy Application (docker-compose)
+      - name: Deploy Application
         shell: powershell
         run: |
           Write-Host "=================================================="
@@ -62,46 +63,44 @@ jobs:
           $repoRoot = "C:\Users\NWUUSER\Documents\deploy SLI\Distributed-Access-Control-System-master"
           Set-Location $repoRoot
 
-          # Detect compose command - use array for proper invocation
-          $composeCmd = @("docker", "compose")
-          docker compose version 2>&1 | Out-Null
-          if ($LASTEXITCODE -ne 0) { 
-            $composeCmd = @("docker-compose")
-            Write-Host "Using legacy docker-compose"
-          } else {
-            Write-Host "Using docker compose plugin"
-          }
-
-          Write-Host "`nStopping old containers..."
-          & $composeCmd[0] $composeCmd[1..($composeCmd.Length-1)] down -v
-          
-          Write-Host "`nStarting new containers..."
-          & $composeCmd[0] $composeCmd[1..($composeCmd.Length-1)] up -d --build
-          
-          if ($LASTEXITCODE -ne 0) {
-            Write-Host "ERROR: compose up failed"
-            & $composeCmd[0] $composeCmd[1..($composeCmd.Length-1)] logs --tail=300
+          # Check for .env
+          if (-Not (Test-Path ".\serve\.env")) {
+            Write-Host "ERROR: serve/.env not found"
             exit 1
           }
 
-          Write-Host "`nWaiting for health checks (up to 90s)..."
+          # Detect compose command
+          $composeCmd = @("docker", "compose")
+          docker compose version 2>&1 | Out-Null
+          if ($LASTEXITCODE -ne 0) { $composeCmd = @("docker-compose") }
+
+          Write-Host "Stopping old containers..."
+          & $composeCmd[0] $composeCmd[1..($composeCmd.Length-1)] --env-file ./serve/.env down -v
+          
+          Write-Host "Starting new containers..."
+          & $composeCmd[0] $composeCmd[1..($composeCmd.Length-1)] --env-file ./serve/.env up -d
+          
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "ERROR: compose up failed"
+            & $composeCmd[0] $composeCmd[1..($composeCmd.Length-1)] --env-file ./serve/.env logs --tail=300
+            exit 1
+          }
+
+          Write-Host "Waiting for containers..."
           $healthy = $false
           for ($i=0; $i -lt 30; $i++) {
-            $ps = & $composeCmd[0] $composeCmd[1..($composeCmd.Length-1)] ps 2>&1
-            if ($ps -match "Up|running") { 
-              $healthy = $true
-              break 
-            }
+            $ps = & $composeCmd[0] $composeCmd[1..($composeCmd.Length-1)] --env-file ./serve/.env ps 2>&1
+            if ($ps -match "Up|running") { $healthy = $true; break }
             Start-Sleep -Seconds 3
           }
 
           if (-Not $healthy) {
             Write-Host "ERROR: Services not healthy"
-            & $composeCmd[0] $composeCmd[1..($composeCmd.Length-1)] logs --tail=300
+            & $composeCmd[0] $composeCmd[1..($composeCmd.Length-1)] --env-file ./serve/.env logs --tail=300
             exit 1
           }
 
-          Write-Host "`nSUCCESS: All containers running"
+          Write-Host "SUCCESS: All containers running"
           docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
 
       - name: Collect logs
@@ -111,12 +110,11 @@ jobs:
           $repoRoot = "C:\Users\NWUUSER\Documents\deploy SLI\Distributed-Access-Control-System-master"
           Set-Location $repoRoot
           
-          # Detect compose command
           $composeCmd = @("docker", "compose")
           docker compose version 2>&1 | Out-Null
           if ($LASTEXITCODE -ne 0) { $composeCmd = @("docker-compose") }
           
-          & $composeCmd[0] $composeCmd[1..($composeCmd.Length-1)] logs --tail=300 | Out-File -FilePath "$env:RUNNER_TEMP\compose-logs.txt" -Encoding UTF8
+          & $composeCmd[0] $composeCmd[1..($composeCmd.Length-1)] --env-file ./serve/.env logs --tail=300 | Out-File -FilePath "$env:RUNNER_TEMP\compose-logs.txt" -Encoding UTF8
 
       - name: Upload logs artifact
         if: always()
