@@ -5,14 +5,39 @@ on:
     branches: [ main ]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: cd-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build-and-deploy:
     runs-on: self-hosted
-    permissions:
-      contents: read
+    timeout-minutes: 40
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
+
+      - name: Verify Docker and docker-compose
+        shell: powershell
+        run: |
+          Write-Host "Pre-flight checks"
+          docker version | Out-Host
+          if ($LASTEXITCODE -ne 0) { Write-Host "ERROR: Docker not available"; exit 1 }
+          docker compose version | Out-Host
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "docker compose plugin not found; trying legacy docker-compose"
+            docker-compose --version | Out-Host
+            if ($LASTEXITCODE -ne 0) { Write-Host "ERROR: docker-compose not available"; exit 1 }
+          }
+
+      - name: Optional pre-clean
+        shell: powershell
+        run: |
+          docker system prune -f
+          docker builder prune -a -f
 
       - name: Build Docker image locally
         shell: powershell
@@ -20,56 +45,93 @@ jobs:
           Write-Host "=================================================="
           Write-Host "BUILDING DOCKER IMAGE"
           Write-Host "=================================================="
-          
           $SHORT_SHA = "${{ github.sha }}".Substring(0, 7)
-          
-          Write-Host "Building image with tag: latest and $SHORT_SHA"
-          Write-Host ""
-          
           docker build -f ./serve/Dockerfile -t face-verification-service:latest -t face-verification-service:$SHORT_SHA .
-          
-          if ($LASTEXITCODE -ne 0) {
-            Write-Host "ERROR: Docker build failed"
-            exit 1
-          }
-          
-          Write-Host ""
-          Write-Host "SUCCESS: Build completed successfully"
+          if ($LASTEXITCODE -ne 0) { Write-Host "ERROR: Docker build failed"; exit 1 }
+          Write-Host "SUCCESS: Build completed"
 
-      - name: Deploy Application
+      - name: Deploy Application (docker-compose)
         shell: powershell
         run: |
           Write-Host "=================================================="
           Write-Host "DEPLOYING APPLICATION"
           Write-Host "=================================================="
-          
-          Set-Location "C:\Users\NWUUSER\Documents\deploy SLI\Distributed-Access-Control-System-master"
-          
-          Write-Host ""
+
+          $repoRoot = "C:\Users\NWUUSER\Documents\deploy SLI\Distributed-Access-Control-System-master"
+          Set-Location $repoRoot
+
+          # Check for .env file
+          if (-Not (Test-Path ".\serve\.env")) {
+            Write-Host "ERROR: ./serve/.env not found"
+            Write-Host "Please create serve/.env with required variables:"
+            Write-Host "  DB_NAME, DB_USER, DB_PASSWORD"
+            Write-Host "  MINIO_ACCESS_KEY, MINIO_SECRET_KEY"
+            Write-Host "  UVICORN_PORT"
+            exit 1
+          }
+
+          # Verify compose file
+          if (-Not (Test-Path ".\docker-compose.yaml") -and -Not (Test-Path ".\docker-compose.yml")) {
+            Write-Host "ERROR: docker-compose file not found"
+            exit 1
+          }
+
+          # Detect compose command
+          $composeCmd = "docker compose"
+          & docker compose version *> $null
+          if ($LASTEXITCODE -ne 0) { $composeCmd = "docker-compose" }
+
           Write-Host "Stopping old containers..."
-          docker-compose down
-          
-          Write-Host ""
+          & $composeCmd down -v
+          if ($LASTEXITCODE -ne 0) { Write-Host "WARN: compose down issues"; $LASTEXITCODE = 0 }
+
           Write-Host "Starting new containers..."
-          docker-compose up -d --build
-          
-          Write-Host ""
-          Write-Host "Waiting for containers to start..."
-          Start-Sleep -Seconds 15
-          
-          Write-Host ""
-          Write-Host "Container status:"
-          docker-compose ps
-          
-          Write-Host ""
-          Write-Host "Checking container health:"
+          & $composeCmd up -d --build
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "ERROR: compose up failed"
+            & $composeCmd logs --tail=300
+            exit 1
+          }
+
+          # Wait for health checks (up to 2 minutes)
+          $healthy = $false
+          for ($i=0; $i -lt 40; $i++) {
+            $ps = & $composeCmd ps --format json | ConvertFrom-Json
+            $allHealthy = $true
+            foreach ($svc in $ps) {
+              if ($svc.Health -ne "healthy" -and $svc.State -ne "running") {
+                $allHealthy = $false
+                break
+              }
+            }
+            if ($allHealthy) { $healthy = $true; break }
+            Start-Sleep -Seconds 3
+          }
+
+          if (-Not $healthy) {
+            Write-Host "ERROR: Services not healthy; logs:"
+            & $composeCmd logs --tail=300
+            exit 1
+          }
+
+          Write-Host "SUCCESS: All containers healthy"
           docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
-          
-          Write-Host ""
-          Write-Host "Recent logs:"
-          docker-compose logs --tail=30
-          
-          Write-Host ""
-          Write-Host "=================================================="
-          Write-Host "SUCCESS: DEPLOYMENT COMPLETED"
-          Write-Host "=================================================="
+
+      - name: Collect logs
+        if: always()
+        shell: powershell
+        run: |
+          $repoRoot = "C:\Users\NWUUSER\Documents\deploy SLI\Distributed-Access-Control-System-master"
+          Set-Location $repoRoot
+          $composeCmd = "docker compose"
+          & docker compose version *> $null
+          if ($LASTEXITCODE -ne 0) { $composeCmd = "docker-compose" }
+          & $composeCmd logs --tail=300 | Out-File -FilePath "$env:RUNNER_TEMP\compose-logs.txt" -Encoding UTF8
+
+      - name: Upload logs artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: deployment-logs
+          path: ${{ runner.temp }}/compose-logs.txt
+          if-no-files-found: warn

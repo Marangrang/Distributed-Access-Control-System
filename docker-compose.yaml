@@ -4,6 +4,8 @@ services:
   db:
     image: ankane/pgvector:latest
     container_name: postgres-db
+    env_file:
+      - ./serve/.env
     environment:
       POSTGRES_DB: ${DB_NAME}
       POSTGRES_USER: ${DB_USER}
@@ -23,6 +25,8 @@ services:
     image: minio/minio:latest
     container_name: minio
     command: server /data --console-address ":9001"
+    env_file:
+      - ./serve/.env
     environment:
       MINIO_ROOT_USER: ${MINIO_ACCESS_KEY}
       MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY}
@@ -48,7 +52,7 @@ services:
     env_file:
       - ./serve/.env
     ports:
-      - "${UVICORN_PORT}:${UVICORN_PORT}"
+      - "${UVICORN_PORT:-8000}:8000"
     depends_on:
       db:
         condition: service_healthy
@@ -56,7 +60,7 @@ services:
         condition: service_healthy
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:${UVICORN_PORT}/health || exit 1"]
+      test: ["CMD-SHELL", "curl -f http://localhost:8000/health || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 10
@@ -71,6 +75,8 @@ services:
   nginx:
     image: nginx:stable-alpine
     container_name: nginx
+    env_file:
+      - ./serve/.env
     depends_on:
       app:
         condition: service_healthy
