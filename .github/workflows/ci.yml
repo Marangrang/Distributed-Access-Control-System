@@ -33,12 +33,13 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
           cache: 'pip'
+          cache-dependency-path: requirement.txt
 
       - name: Cache pip (requirements)
         uses: actions/cache@v4
         with:
           path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ matrix.python-version }}-${{ hashFiles('**/requirement.txt') }}
+          key: ${{ runner.os }}-pip-${{ matrix.python-version }}-${{ hashFiles('requirement.txt') }}
           restore-keys: |
             ${{ runner.os }}-pip-${{ matrix.python-version }}-
 
@@ -72,15 +73,21 @@ jobs:
   docker-sanity:
     name: Validate Docker build (CPU-only)
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 60  # Increased from 20 to 60 minutes
     needs: [build-test]
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
       - name: Build Docker image (sanity check)
-        run: |
-          echo "Building Docker image for sanity check..."
-          # Ensure Dockerfile builds; use default buildkit
-          docker build -t face-verification:ci -f serve/Dockerfile .
-          echo "Docker image built successfully"
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: serve/Dockerfile
+          push: false
+          tags: face-verification:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
