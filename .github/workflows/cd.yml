@@ -47,12 +47,20 @@ jobs:
           docker compose down -v
           docker system prune -f
 
+      - name: Fail if compose file missing
+        shell: powershell
+        run: |
+          if (-not (Test-Path '.\docker-compose.yml')) {
+            Write-Host "docker-compose.yml not found"
+            exit 1
+          }
+
       - name: Build Docker image with cache
         shell: powershell
         env:
           DOCKER_BUILDKIT: 1
         run: |
-          docker compose build
+          docker compose build --progress=plain
 
       - name: Deploy Application
         shell: powershell
@@ -65,23 +73,23 @@ jobs:
         run: |
           $deadline = (Get-Date).AddMinutes(2)
           $ok = $false
-          do {
+          while (-not $ok -and (Get-Date) -lt $deadline) {
             try {
               $res = Invoke-RestMethod -Uri "http://localhost:8080/health" -TimeoutSec 5
               if ($res.status -eq 'ok') { $ok = $true }
             } catch { Start-Sleep -Seconds 5 }
-          } while (-not $ok -and (Get-Date) -lt $deadline)
-          if (-not $ok) { Write-Host "Health check failed"; exit 1 }
-          Write-Host "Service healthy"
+          }
+          if (-not $ok) { Write-Host "Health check failed"; docker compose logs; exit 1 }
 
       - name: Collect logs
         if: always()
         shell: powershell
         run: |
-          mkdir -Force logs | Out-Null
-          docker compose logs --no-color > logs\compose.log 2>&1
-          docker ps -a > logs\ps-a.txt
-          docker info > logs\docker-info.txt
+            mkdir -Force logs | Out-Null
+            docker compose logs --no-color > logs\compose.log 2>&1
+            docker ps -a > logs\ps-a.txt
+            docker info > logs\docker-info.txt
+            docker compose config > logs\compose-config.txt
 
       - name: Upload logs artifact
         if: always()
@@ -89,3 +97,4 @@ jobs:
         with:
           name: docker-logs
           path: logs
+          retention-days: 7
