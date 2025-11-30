@@ -15,111 +15,144 @@ concurrency:
 jobs:
   build-and-deploy:
     runs-on: self-hosted
-    timeout-minutes: 90  # Increased timeout
+    timeout-minutes: 90
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Start Docker Desktop
+        shell: powershell
+        run: |
+          $dockerDesktopPath = "C:\Program Files\Docker\Docker\Docker Desktop.exe"
+          
+          # Check if Docker Desktop process is running
+          $dockerProcess = Get-Process "Docker Desktop" -ErrorAction SilentlyContinue
+          
+          if (-not $dockerProcess) {
+            Write-Host "Starting Docker Desktop..."
+            Start-Process "C:\Program Files\Docker\Docker\Docker Desktop.exe"
+            
+            # Wait for Docker daemon to be ready (max 120 seconds)
+            $timeout = 120
+            $elapsed = 0
+            $ready = $false
+            
+            while ($elapsed -lt $timeout) {
+              Start-Sleep -Seconds 5
+              $elapsed += 5
+              
+              try {
+                $null = docker version 2>&1
+                if ($LASTEXITCODE -eq 0) {
+                  Write-Host "Docker is ready after $elapsed seconds"
+                  $ready = $true
+                  break
+                }
+              } catch {
+                Write-Host "Waiting for Docker... ($elapsed/$timeout seconds)"
+              }
+            }
+            
+            if (-not $ready) {
+              Write-Host "ERROR: Docker Desktop failed to start within $timeout seconds"
+              exit 1
+            }
+          } else {
+            Write-Host "Docker Desktop is already running"
+          }
+
       - name: Verify Docker
         shell: powershell
         run: |
-          docker version | Out-Host
-          if ($LASTEXITCODE -ne 0) { Write-Host "ERROR: Docker not available"; exit 1 }
+          Write-Host "Docker version:"
+          docker version
+          
+          Write-Host "`nDocker info:"
+          docker info
+          
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "ERROR: Docker verification failed"
+            exit 1
+          }
+          
+          Write-Host "`nSUCCESS: Docker is running and accessible"
 
       - name: Optional pre-clean
         shell: powershell
+        continue-on-error: true
         run: |
-          docker system prune -f
-          docker builder prune --filter "until=72h" -f
+          Write-Host "Stopping and removing old containers..."
+          docker compose -f docker-compose.yaml down --remove-orphans
+          
+          Write-Host "Pruning unused Docker resources..."
+          docker system prune -f --volumes
 
       - name: Build Docker image with cache
         shell: powershell
         run: |
-          Write-Host "=================================================="
-          Write-Host "BUILDING DOCKER IMAGE"
-          Write-Host "=================================================="
-          $SHORT_SHA = "${{ github.sha }}".Substring(0, 7)
-          
-          # Use BuildKit with inline cache
           $env:DOCKER_BUILDKIT = "1"
-          docker build `
-            --cache-from face-verification-service:latest `
-            --build-arg BUILDKIT_INLINE_CACHE=1 `
-            -f ./serve/Dockerfile `
-            -t face-verification-service:latest `
-            -t face-verification-service:$SHORT_SHA `
-            .
           
-          if ($LASTEXITCODE -ne 0) { Write-Host "ERROR: Docker build failed"; exit 1 }
-          Write-Host "SUCCESS: Build completed"
+          Write-Host "Building Docker image..."
+          docker compose -f docker-compose.yaml build --no-cache app
+          
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "ERROR: Docker build failed"
+            exit 1
+          }
 
       - name: Deploy Application
         shell: powershell
         run: |
-          Write-Host "=================================================="
-          Write-Host "DEPLOYING APPLICATION"
-          Write-Host "=================================================="
-
-          $repoRoot = "C:\Users\NWUUSER\Documents\deploy SLI\Distributed-Access-Control-System-master"
-          Set-Location $repoRoot
-
-          # Check for .env
-          if (-Not (Test-Path ".\serve\.env")) {
-            Write-Host "ERROR: serve/.env not found"
-            exit 1
-          }
-
-          # Detect compose command
-          $composeCmd = @("docker", "compose")
-          docker compose version 2>&1 | Out-Null
-          if ($LASTEXITCODE -ne 0) { $composeCmd = @("docker-compose") }
-
-          Write-Host "Stopping old containers..."
-          & $composeCmd[0] $composeCmd[1..($composeCmd.Length-1)] --env-file ./serve/.env down -v
+          Write-Host "Starting services..."
+          docker compose -f docker-compose.yaml up -d
           
-          Write-Host "Starting new containers..."
-          & $composeCmd[0] $composeCmd[1..($composeCmd.Length-1)] --env-file ./serve/.env up -d
+          Write-Host "Waiting for services to be healthy..."
+          Start-Sleep -Seconds 30
           
-          if ($LASTEXITCODE -ne 0) {
-            Write-Host "ERROR: compose up failed"
-            & $composeCmd[0] $composeCmd[1..($composeCmd.Length-1)] --env-file ./serve/.env logs --tail=300
-            exit 1
-          }
+          Write-Host "`nContainer status:"
+          docker compose -f docker-compose.yaml ps
 
-          Write-Host "Waiting for containers..."
+      - name: Health check
+        shell: powershell
+        run: |
+          Write-Host "Checking application health..."
+          
+          $maxAttempts = 12
+          $attempt = 0
           $healthy = $false
-          for ($i=0; $i -lt 30; $i++) {
-            $ps = & $composeCmd[0] $composeCmd[1..($composeCmd.Length-1)] --env-file ./serve/.env ps 2>&1
-            if ($ps -match "Up|running") { $healthy = $true; break }
-            Start-Sleep -Seconds 3
+          
+          while ($attempt -lt $maxAttempts) {
+            $attempt++
+            try {
+              $response = Invoke-WebRequest -Uri "http://localhost:8000/health" -TimeoutSec 5
+              if ($response.StatusCode -eq 200) {
+                Write-Host "Application is healthy!"
+                $healthy = $true
+                break
+              }
+            } catch {
+              Write-Host "Attempt $attempt/$maxAttempts - waiting for app..."
+              Start-Sleep -Seconds 10
+            }
           }
-
-          if (-Not $healthy) {
-            Write-Host "ERROR: Services not healthy"
-            & $composeCmd[0] $composeCmd[1..($composeCmd.Length-1)] --env-file ./serve/.env logs --tail=300
+          
+          if (-not $healthy) {
+            Write-Host "ERROR: Application failed health check"
+            docker compose -f docker-compose.yaml logs app
             exit 1
           }
-
-          Write-Host "SUCCESS: All containers running"
-          docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
 
       - name: Collect logs
         if: always()
         shell: powershell
         run: |
-          $repoRoot = "C:\Users\NWUUSER\Documents\deploy SLI\Distributed-Access-Control-System-master"
-          Set-Location $repoRoot
-          
-          $composeCmd = @("docker", "compose")
-          docker compose version 2>&1 | Out-Null
-          if ($LASTEXITCODE -ne 0) { $composeCmd = @("docker-compose") }
-          
-          & $composeCmd[0] $composeCmd[1..($composeCmd.Length-1)] --env-file ./serve/.env logs --tail=300 | Out-File -FilePath "$env:RUNNER_TEMP\compose-logs.txt" -Encoding UTF8
+          New-Item -ItemType Directory -Force -Path logs
+          docker compose -f docker-compose.yaml logs --no-color > logs/docker-compose.log 2>&1
 
       - name: Upload logs artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: deployment-logs
-          path: ${{ runner.temp }}/compose-logs.txt
+          name: deployment-logs-${{ github.run_number }}
+          path: logs/
           if-no-files-found: warn
