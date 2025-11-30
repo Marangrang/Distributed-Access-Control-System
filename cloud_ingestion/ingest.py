@@ -1,6 +1,6 @@
-# ingest.py: Upload embeddings to cloud (PostgreSQL with pgvector) and images to S3
+# ingest.py: Upload embeddings to cloud (PostgreSQL with pgvector) and
+# images to S3
 import psycopg2
-import numpy as np
 import os
 from PIL import Image
 import boto3
@@ -8,6 +8,7 @@ from facenet_pytorch import MTCNN, InceptionResnetV1
 from torchvision import transforms
 from sklearn.preprocessing import normalize
 import io
+
 
 def get_minio_client():
     endpoint_url = os.environ.get('MINIO_ENDPOINT', 'http://localhost:9000')
@@ -22,24 +23,35 @@ def get_minio_client():
         region_name=region,
     )
 
+
 def upload_to_s3(local_path, bucket, key):
     s3 = get_minio_client()
     s3.upload_file(local_path, bucket, key)
+
 
 def upload_bytes_to_s3(img_bytes, bucket, key):
     s3 = get_minio_client()
     s3.upload_fileobj(io.BytesIO(img_bytes), bucket, key)
 
+
 def insert_embedding(conn, driver_id, embedding):
     embedding_1d = embedding.squeeze().tolist()  # Ensure 1D
     with conn.cursor() as cur:
-        cur.execute("INSERT INTO face_vectors (driver_id, embedding) VALUES (%s, %s)", 
-                    (driver_id, embedding_1d))
+        cur.execute(
+            "INSERT INTO face_vectors (driver_id, embedding) VALUES (%s, %s)",
+            (driver_id,
+             embedding_1d))
         conn.commit()
+
 
 if __name__ == "__main__":
     # Config
-    conn = psycopg2.connect(database="postgres", user="postgres", password="mypassword", host="localhost", port="5432")
+    conn = psycopg2.connect(
+        database="postgres",
+        user="postgres",
+        password="mypassword",
+        host="localhost",
+        port="5432")
     bucket = "face-verification-bucket"
     originals_prefix = "originals/"
     thumbs_prefix = "thumbnails/"

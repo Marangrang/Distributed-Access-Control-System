@@ -7,10 +7,16 @@ Placeholder training/embedding generation script.
 """
 import os
 
+
 def main():
     os.makedirs("models", exist_ok=True)
     os.makedirs("verification_service/faiss_index", exist_ok=True)
-    print("Placeholder train script. Save model checkpoints to ./models/ and index to verification_service/faiss_index/")
+    print(
+        "Placeholder train script. "
+        "Save model checkpoints to ./models/ "
+        "and index to verification_service/faiss_index/"
+    )
+
 
 if __name__ == "__main__":
     main()
