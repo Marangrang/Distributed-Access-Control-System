@@ -11,6 +11,7 @@ from facenet_pytorch import MTCNN, InceptionResnetV1
 import os
 import logging
 from fastapi.responses import Response
+from . import metrics
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("verification_service")
@@ -80,8 +81,8 @@ try:
             metadata = json.load(f)
     else:
         metadata = []
-except Exception as e:
-    logger.exception("Error loading metadata: %s", e)
+except Exception:
+    logger.exception("Error loading metadata")
     metadata = []
 
 app = FastAPI()
@@ -96,7 +97,7 @@ def embed_image_from_base64(b64: str):
     try:
         data = base64.b64decode(b64)
         img = Image.open(BytesIO(data)).convert("RGB")
-    except Exception as e:
+    except Exception:
         raise HTTPException(status_code=400, detail="invalid base64 image")
 
     face = mtcnn(img)

@@ -112,8 +112,11 @@ def sync_vectors(api_url="https://your-api.com/vectors",
         for thumb in data.get("thumbnails", []):
             thumb_resp = requests.get(f"{thumb_url}/{thumb['driver_id']}.jpg")
             if thumb_resp.status_code == 200:
-                thumb_path = f"verification_service/faiss_index/thumbs/{
-                    thumb['driver_id']}.jpg"
+                # FIX: Break long string across multiple lines
+                thumb_path = (
+                    f"verification_service/faiss_index/thumbs/"
+                    f"{thumb['driver_id']}.jpg"
+                )
                 with open(thumb_path, "wb") as tf:
                     tf.write(thumb_resp.content)
         # Save new checkpoint
