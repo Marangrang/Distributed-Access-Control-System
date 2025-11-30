@@ -20,139 +20,72 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Start Docker Desktop
+      - name: Ensure Docker Desktop is up
         shell: powershell
         run: |
-          $dockerDesktopPath = "C:\Program Files\Docker\Docker\Docker Desktop.exe"
-          
-          # Check if Docker Desktop process is running
-          $dockerProcess = Get-Process "Docker Desktop" -ErrorAction SilentlyContinue
-          
-          if (-not $dockerProcess) {
-            Write-Host "Starting Docker Desktop..."
-            Start-Process "C:\Program Files\Docker\Docker\Docker Desktop.exe"
-            
-            # Wait for Docker daemon to be ready (max 120 seconds)
-            $timeout = 120
-            $elapsed = 0
-            $ready = $false
-            
-            while ($elapsed -lt $timeout) {
-              Start-Sleep -Seconds 5
-              $elapsed += 5
-              
-              try {
-                $null = docker version 2>&1
-                if ($LASTEXITCODE -eq 0) {
-                  Write-Host "Docker is ready after $elapsed seconds"
-                  $ready = $true
-                  break
-                }
-              } catch {
-                Write-Host "Waiting for Docker... ($elapsed/$timeout seconds)"
-              }
-            }
-            
-            if (-not $ready) {
-              Write-Host "ERROR: Docker Desktop failed to start within $timeout seconds"
-              exit 1
-            }
-          } else {
-            Write-Host "Docker Desktop is already running"
-          }
+          $ErrorActionPreference = 'Stop'
+          docker context use desktop-linux | Out-Null
+          $deadline = (Get-Date).AddMinutes(3)
+          do {
+            Start-Sleep -Seconds 5
+            try { docker version | Out-Null; $ok = $true } catch { $ok = $false }
+          } while ((-not $ok) -and (Get-Date) -lt $deadline)
+          if (-not $ok) { Write-Host 'ERROR: Docker daemon not ready'; exit 1 }
 
       - name: Verify Docker
         shell: powershell
         run: |
           Write-Host "Docker version:"
           docker version
-          
           Write-Host "`nDocker info:"
           docker info
-          
-          if ($LASTEXITCODE -ne 0) {
-            Write-Host "ERROR: Docker verification failed"
-            exit 1
-          }
-          
-          Write-Host "`nSUCCESS: Docker is running and accessible"
 
       - name: Optional pre-clean
         shell: powershell
         continue-on-error: true
         run: |
-          Write-Host "Stopping and removing old containers..."
-          docker compose -f docker-compose.yaml down --remove-orphans
-          
-          Write-Host "Pruning unused Docker resources..."
-          docker system prune -f --volumes
+          docker compose down -v
+          docker system prune -f
 
       - name: Build Docker image with cache
         shell: powershell
+        env:
+          DOCKER_BUILDKIT: 1
         run: |
-          $env:DOCKER_BUILDKIT = "1"
-          
-          Write-Host "Building Docker image..."
-          docker compose -f docker-compose.yaml build --no-cache app
-          
-          if ($LASTEXITCODE -ne 0) {
-            Write-Host "ERROR: Docker build failed"
-            exit 1
-          }
+          docker compose build
 
       - name: Deploy Application
         shell: powershell
         run: |
-          Write-Host "Starting services..."
-          docker compose -f docker-compose.yaml up -d
-          
-          Write-Host "Waiting for services to be healthy..."
-          Start-Sleep -Seconds 30
-          
-          Write-Host "`nContainer status:"
-          docker compose -f docker-compose.yaml ps
+          docker compose up -d
+          docker compose ps
 
       - name: Health check
         shell: powershell
         run: |
-          Write-Host "Checking application health..."
-          
-          $maxAttempts = 12
-          $attempt = 0
-          $healthy = $false
-          
-          while ($attempt -lt $maxAttempts) {
-            $attempt++
+          $deadline = (Get-Date).AddMinutes(2)
+          $ok = $false
+          do {
             try {
-              $response = Invoke-WebRequest -Uri "http://localhost:8000/health" -TimeoutSec 5
-              if ($response.StatusCode -eq 200) {
-                Write-Host "Application is healthy!"
-                $healthy = $true
-                break
-              }
-            } catch {
-              Write-Host "Attempt $attempt/$maxAttempts - waiting for app..."
-              Start-Sleep -Seconds 10
-            }
-          }
-          
-          if (-not $healthy) {
-            Write-Host "ERROR: Application failed health check"
-            docker compose -f docker-compose.yaml logs app
-            exit 1
-          }
+              $res = Invoke-RestMethod -Uri "http://localhost:8080/health" -TimeoutSec 5
+              if ($res.status -eq 'ok') { $ok = $true }
+            } catch { Start-Sleep -Seconds 5 }
+          } while (-not $ok -and (Get-Date) -lt $deadline)
+          if (-not $ok) { Write-Host "Health check failed"; exit 1 }
+          Write-Host "Service healthy"
 
       - name: Collect logs
         if: always()
         shell: powershell
         run: |
-          New-Item -ItemType Directory -Force -Path logs
-          docker compose -f docker-compose.yaml logs --no-color > logs/docker-compose.log 2>&1
+          mkdir -Force logs | Out-Null
+          docker compose logs --no-color > logs\compose.log 2>&1
+          docker ps -a > logs\ps-a.txt
+          docker info > logs\docker-info.txt
 
       - name: Upload logs artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: deployment-logs-${{ github.run_number }}
-          path: logs/
-          if-no-files-found: warn
+          name: docker-logs
+          path: logs
