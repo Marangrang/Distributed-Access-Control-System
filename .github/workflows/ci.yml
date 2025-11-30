@@ -47,7 +47,12 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirement.txt
-          pip install pytest pytest-cov flake8
+          pip install pytest pytest-cov flake8 autopep8
+
+      - name: Auto-fix linting issues
+        run: |
+          echo "Auto-fixing PEP8 issues..."
+          autopep8 --in-place --aggressive --aggressive --recursive .
 
       - name: Lint code (flake8)
         run: |
@@ -90,4 +95,3 @@ jobs:
           push: false
           tags: face-verification:ci
           cache-from: type=gha
-          cache-to: type=gha,mode=max
