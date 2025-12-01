@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-FROM python:3.9-slim AS builder
+FROM python:3.14-slim AS builder
 
 WORKDIR /app
 
@@ -30,7 +30,7 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     pip install --default-timeout=1200 -r requirements_no_torch.txt
 
 # Stage: Final image
-FROM python:3.9-slim
+FROM python:3.14-slim
 
 WORKDIR /app
 
