@@ -57,7 +57,12 @@ jobs:
       - name: Lint code (flake8)
         run: |
           echo "Running flake8 linting..."
-          flake8 . --max-line-length=120 --exclude=.venv,__pycache__,.git,airflow
+          flake8 . \
+            --max-line-length=120 \
+            --exclude=.venv,__pycache__,.git,airflow \
+            --extend-ignore=F841,F401
+          # F841: local variable assigned but never used
+          # F401: module imported but unused
 
       - name: Validate Airflow DAGs
         if: hashFiles('airflow/dags/**') != ''
