@@ -35,6 +35,8 @@ jobs:
           MINIO_ROOT_USER=${{ secrets.MINIO_ROOT_USER }}
           MINIO_ROOT_PASSWORD=${{ secrets.MINIO_ROOT_PASSWORD }}
           BUCKET_NAME=${{ secrets.BUCKET_NAME }}
+          UVICORN_WORKERS=2
+          UVICORN_PORT=8000
           "@ | Out-File -FilePath .env -Encoding utf8
 
       - name: Create serve/.env from secrets

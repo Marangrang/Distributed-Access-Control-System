@@ -77,7 +77,7 @@ jobs:
               - 'pytest.ini'
 
       - name: Run pytest
-        if: steps.filter.outputs.python == 'true' && (hashFiles('tests/**') != '' || hashFiles('pytest.ini') != '')
+        if: hashFiles('tests/**') != '' || hashFiles('pytest.ini') != ''
         run: |
           pytest -q --disable-warnings --maxfail=1 \
             --cov=. \
@@ -95,39 +95,43 @@ jobs:
 
       - name: Upload test artifacts to MinIO
         if: always()
+        continue-on-error: true
         env:
-          MINIO_ENDPOINT: ${{ secrets.MINIO_ENDPOINT || 'play.min.io' }}
+          MINIO_ENDPOINT: ${{ secrets.MINIO_ENDPOINT || 'localhost:9000' }}
           MINIO_ACCESS_KEY: ${{ secrets.MINIO_ACCESS_KEY }}
           MINIO_SECRET_KEY: ${{ secrets.MINIO_SECRET_KEY }}
         run: |
+          if [ -z "$MINIO_ACCESS_KEY" ] || [ -z "$MINIO_SECRET_KEY" ]; then
+            echo "⚠️  No MinIO credentials provided. Skipping upload."
+            exit 0
+          fi
+
+          # Determine protocol
+          PROTO=http; ENDPOINT="$MINIO_ENDPOINT"
+          if [[ "$ENDPOINT" == play.min.io* || "$ENDPOINT" == https://* ]]; then
+            PROTO=https
+            ENDPOINT="${ENDPOINT#https://}"
+            ENDPOINT="${ENDPOINT#http://}"
+          fi
+
           # Configure MinIO
-          mc alias set myminio https://$MINIO_ENDPOINT $MINIO_ACCESS_KEY $MINIO_SECRET_KEY
-          
-          # Create bucket if not exists
-          mc mb --ignore-existing myminio/ci-artifacts
-          
-          # Create timestamped folder
+          mc alias set myminio "$PROTO://$ENDPOINT" "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY"
+
+          # Create bucket (ignore errors for shared endpoints)
+          mc mb --ignore-existing myminio/ci-artifacts || echo "Bucket creation skipped"
+
+          # Create timestamped path
           TIMESTAMP=$(date +%Y-%m-%d-%H%M%S)
           ARTIFACT_PATH="ci-artifacts/${{ github.repository }}/${{ github.ref_name }}/${{ github.run_id }}-${TIMESTAMP}"
-          
-          # Upload test results
-          if [ -f "test-results.xml" ]; then
-            mc cp test-results.xml "myminio/${ARTIFACT_PATH}/"
-          fi
-          
-          # Upload coverage report
-          if [ -f "coverage.xml" ]; then
-            mc cp coverage.xml "myminio/${ARTIFACT_PATH}/"
-          fi
-          
-          # Upload HTML coverage report
-          if [ -d "htmlcov" ]; then
-            mc cp --recursive htmlcov/ "myminio/${ARTIFACT_PATH}/htmlcov/"
-          fi
-          
-          echo "Artifacts uploaded to: ${ARTIFACT_PATH}"
 
-      - name: Upload coverage to Codecov (optional backup)
+          # Upload files
+          [ -f test-results.xml ] && mc cp test-results.xml "myminio/${ARTIFACT_PATH}/" || true
+          [ -f coverage.xml ] && mc cp coverage.xml "myminio/${ARTIFACT_PATH}/" || true
+          [ -d htmlcov ] && mc cp --recursive htmlcov/ "myminio/${ARTIFACT_PATH}/htmlcov/" || true
+
+          echo "✅ Artifacts uploaded to: ${ARTIFACT_PATH}"
+
+      - name: Upload coverage to Codecov
         if: hashFiles('coverage.xml') != ''
         uses: codecov/codecov-action@v3
         with:
