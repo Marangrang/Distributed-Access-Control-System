@@ -15,7 +15,7 @@ concurrency:
 jobs:
   build-and-deploy:
     runs-on: self-hosted
-    timeout-minutes: 30  # Reduced from 240 to 30 minutes
+    timeout-minutes: 30
     
     steps:
       - name: Checkout code
@@ -51,7 +51,7 @@ jobs:
         run: |
           Write-Host "Cleaning up Docker cache..."
           docker system prune -af --volumes
-          Write-Host "✓ Docker cache cleaned"
+          Write-Host "[OK] Docker cache cleaned"
 
       - name: Build Docker images with cache
         shell: powershell
@@ -61,19 +61,18 @@ jobs:
         run: |
           Write-Host "Building Docker images with BuildKit cache..."
           
-          # Build with cache from GitHub Actions cache or registry
           docker compose build `
             --build-arg BUILDKIT_INLINE_CACHE=1 `
             --progress=plain
           
-          Write-Host "✓ Docker images built successfully"
+          Write-Host "[OK] Docker images built successfully"
 
       - name: Start services
         shell: powershell
         run: |
           Write-Host "Starting services..."
           docker compose up -d
-          Write-Host "✓ Services started"
+          Write-Host "[OK] Services started"
 
       - name: Wait for services to be healthy
         shell: powershell
@@ -81,7 +80,7 @@ jobs:
         run: |
           Write-Host "Waiting for services to be healthy..."
           
-          $maxAttempts = 30  # Reduced from 60
+          $maxAttempts = 30
           $attempt = 0
           $allHealthy = $false
           
@@ -96,7 +95,7 @@ jobs:
             
             if ($unhealthy.Count -eq 0) {
               $allHealthy = $true
-              Write-Host "✓ All services are healthy"
+              Write-Host "[OK] All services are healthy"
             } else {
               Write-Host "Waiting for: $($unhealthy.Service -join ', ')"
               Start-Sleep -Seconds 5
@@ -104,7 +103,7 @@ jobs:
           }
           
           if (-not $allHealthy) {
-            Write-Host "✗ Services failed to become healthy"
+            Write-Host "[ERROR] Services failed to become healthy"
             docker compose ps
             docker compose logs --tail=50
             exit 1
@@ -123,7 +122,7 @@ jobs:
             try {
               $res = Invoke-RestMethod -Uri "http://localhost:8080/health" -TimeoutSec 5
               if ($res.status -eq 'ok' -or $res -eq 'ok') {
-                Write-Host "✓ Health check passed: $res"
+                Write-Host "[OK] Health check passed: $res"
                 $ok = $true
               }
             } catch {
@@ -133,7 +132,7 @@ jobs:
           }
           
           if (-not $ok) {
-            Write-Host "✗ Health check failed after timeout"
+            Write-Host "[ERROR] Health check failed after timeout"
             docker compose logs app --tail=50
             exit 1
           }
@@ -143,20 +142,19 @@ jobs:
         run: |
           Write-Host "Testing critical endpoints..."
           
-          # Test metrics endpoint
           try {
             $metrics = Invoke-WebRequest -Uri "http://localhost:8080/metrics" -TimeoutSec 5
             if ($metrics.StatusCode -eq 200) {
-              Write-Host "✓ Metrics endpoint: OK"
+              Write-Host "[OK] Metrics endpoint: OK"
             } else {
               throw "Metrics endpoint returned: $($metrics.StatusCode)"
             }
           } catch {
-            Write-Host "✗ Metrics endpoint failed: $_"
+            Write-Host "[ERROR] Metrics endpoint failed: $_"
             exit 1
           }
           
-          Write-Host "✓ All smoke tests passed"
+          Write-Host "[OK] All smoke tests passed"
 
       - name: Smoke Test - Database Connectivity
         shell: powershell
@@ -164,9 +162,9 @@ jobs:
           Write-Host "Testing database connectivity..."
           $dbCheck = docker compose exec -T db pg_isready -U $env:DB_USER -d $env:DB_NAME
           if ($LASTEXITCODE -eq 0) {
-            Write-Host "✓ Database is ready"
+            Write-Host "[OK] Database is ready"
           } else {
-            Write-Host "✗ Database check failed"
+            Write-Host "[ERROR] Database check failed"
             docker compose logs db --tail=30
             exit 1
           }
@@ -178,10 +176,10 @@ jobs:
           try {
             $minio = Invoke-WebRequest -Uri "http://localhost:9000/minio/health/live" -TimeoutSec 5
             if ($minio.StatusCode -eq 200) {
-              Write-Host "✓ MinIO is healthy"
+              Write-Host "[OK] MinIO is healthy"
             }
           } catch {
-            Write-Host "✗ MinIO health check failed: $_"
+            Write-Host "[ERROR] MinIO health check failed: $_"
             docker compose logs minio --tail=30
             exit 1
           }
@@ -195,7 +193,6 @@ jobs:
           
           $services = @('app', 'db', 'minio')
           
-          # Add Airflow services if they exist
           $runningServices = docker compose ps --services
           if ($runningServices -contains 'airflow-webserver') {
             $services += @('airflow-webserver', 'airflow-scheduler')
@@ -206,7 +203,7 @@ jobs:
             docker compose logs --tail=200 $service > "logs/${service}.log" 2>&1
           }
           
-          Write-Host "✓ Logs collected"
+          Write-Host "[OK] Logs collected"
 
       - name: Install MinIO Client
         if: always()
@@ -217,58 +214,97 @@ jobs:
             Invoke-WebRequest `
               -Uri "https://dl.min.io/client/mc/release/windows-amd64/mc.exe" `
               -OutFile "mc.exe"
-            Write-Host "✓ MinIO Client downloaded"
+            Write-Host "[OK] MinIO Client downloaded"
           } else {
-            Write-Host "✓ MinIO Client already exists"
+            Write-Host "[OK] MinIO Client already exists"
           }
 
       - name: Upload artifacts to MinIO
         if: always()
         shell: powershell
+        continue-on-error: true
         run: |
           Write-Host "Configuring MinIO..."
           
-          # Use MC_HOST_ environment variable (simpler than alias)
-          $env:MC_HOST_myminio = "http://$($env:MINIO_ACCESS_KEY):$($env:MINIO_SECRET_KEY)@localhost:9000"
+          # Get MinIO container IP or use localhost
+          $minioContainer = docker compose ps minio --format json | ConvertFrom-Json
           
-          # Create buckets
-          Write-Host "Creating buckets..."
-          .\mc.exe mb --ignore-existing myminio/cd-logs 2>&1 | Out-Null
-          .\mc.exe mb --ignore-existing myminio/cd-artifacts 2>&1 | Out-Null
-          
-          # Create timestamped path
-          $timestamp = Get-Date -Format "yyyy-MM-dd-HHmmss"
-          $repo = "${{ github.repository }}" -replace '/', '-'
-          $runId = "${{ github.run_id }}"
-          $basePath = "${repo}/${{ github.ref_name }}/${runId}-${timestamp}"
-          
-          Write-Host "Artifact path: $basePath"
-          
-          # Upload logs
-          if (Test-Path "logs") {
-            Write-Host "Uploading logs..."
-            .\mc.exe cp --recursive logs/ "myminio/cd-logs/${basePath}/" 2>&1 | Out-Null
-            Write-Host "✓ Logs uploaded"
+          if ($minioContainer) {
+            # Use MC_HOST_ environment variable
+            $minioHost = "localhost"
+            $minioPort = "9000"
+            
+            $env:MC_HOST_myminio = "http://$($env:MINIO_ACCESS_KEY):$($env:MINIO_SECRET_KEY)@${minioHost}:${minioPort}"
+            
+            Write-Host "MinIO endpoint: ${minioHost}:${minioPort}"
+            
+            # Wait for MinIO to be accessible
+            $maxWait = 30
+            $waited = 0
+            $minioReady = $false
+            
+            while (-not $minioReady -and $waited -lt $maxWait) {
+              try {
+                $healthCheck = Invoke-WebRequest -Uri "http://${minioHost}:${minioPort}/minio/health/live" -TimeoutSec 2 -ErrorAction SilentlyContinue
+                if ($healthCheck.StatusCode -eq 200) {
+                  $minioReady = $true
+                  Write-Host "[OK] MinIO is accessible"
+                }
+              } catch {
+                Write-Host "Waiting for MinIO to be accessible..."
+                Start-Sleep -Seconds 2
+                $waited += 2
+              }
+            }
+            
+            if (-not $minioReady) {
+              Write-Host "[WARNING] MinIO not accessible, skipping artifact upload"
+              exit 0
+            }
+            
+            # Create buckets
+            Write-Host "Creating buckets..."
+            .\mc.exe mb --ignore-existing myminio/cd-logs 2>&1 | Write-Host
+            .\mc.exe mb --ignore-existing myminio/cd-artifacts 2>&1 | Write-Host
+            
+            # Create timestamped path
+            $timestamp = Get-Date -Format "yyyy-MM-dd-HHmmss"
+            $repo = "${{ github.repository }}" -replace '/', '-'
+            $runId = "${{ github.run_id }}"
+            $basePath = "${repo}/${{ github.ref_name }}/${runId}-${timestamp}"
+            
+            Write-Host "Artifact path: $basePath"
+            
+            # Upload logs
+            if (Test-Path "logs") {
+              Write-Host "Uploading logs..."
+              $uploadResult = .\mc.exe cp --recursive logs/ "myminio/cd-logs/${basePath}/" 2>&1
+              Write-Host $uploadResult
+              Write-Host "[OK] Logs uploaded"
+            }
+            
+            # Upload any test results if they exist
+            if (Test-Path "test-results") {
+              Write-Host "Uploading test results..."
+              $uploadResult = .\mc.exe cp --recursive test-results/ "myminio/cd-artifacts/${basePath}/test-results/" 2>&1
+              Write-Host $uploadResult
+              Write-Host "[OK] Test results uploaded"
+            }
+            
+            # Generate output
+            $logsUrl = "http://localhost:9000/cd-logs/${basePath}/"
+            $consoleUrl = "http://localhost:9001"
+            
+            Write-Host ""
+            Write-Host "========================================"
+            Write-Host "Deployment Artifacts:"
+            Write-Host "  Logs: $logsUrl"
+            Write-Host "  MinIO Console: $consoleUrl"
+            Write-Host "  Path: $basePath"
+            Write-Host "========================================"
+          } else {
+            Write-Host "[WARNING] MinIO container not found, skipping upload"
           }
-          
-          # Upload any test results if they exist
-          if (Test-Path "test-results") {
-            Write-Host "Uploading test results..."
-            .\mc.exe cp --recursive test-results/ "myminio/cd-artifacts/${basePath}/test-results/" 2>&1 | Out-Null
-            Write-Host "✓ Test results uploaded"
-          }
-          
-          # Generate output (avoid terminator issues)
-          $logsUrl = "http://localhost:9000/cd-logs/${basePath}/"
-          $consoleUrl = "http://localhost:9001"
-          
-          Write-Host ""
-          Write-Host "========================================"
-          Write-Host "Deployment Artifacts:"
-          Write-Host "  Logs: $logsUrl"
-          Write-Host "  MinIO Console: $consoleUrl"
-          Write-Host "  Path: $basePath"
-          Write-Host "========================================"
 
       - name: Upload logs to GitHub Artifacts
         if: always()
@@ -276,7 +312,7 @@ jobs:
         with:
           name: deployment-logs-${{ github.run_id }}
           path: logs/
-          retention-days: 7  # Reduced from 30
+          retention-days: 7
           if-no-files-found: warn
 
       - name: Display service status
@@ -303,31 +339,35 @@ jobs:
         run: |
           Write-Host "Cleaning up old artifacts (>7 days)..."
           
-          $env:MC_HOST_myminio = "http://$($env:MINIO_ACCESS_KEY):$($env:MINIO_SECRET_KEY)@localhost:9000"
-          
-          $cutoffDate = (Get-Date).AddDays(-7)  # Reduced from 30
-          
-          $buckets = @('cd-logs', 'cd-artifacts')
-          foreach ($bucket in $buckets) {
-            Write-Host "Checking bucket: $bucket"
+          try {
+            $env:MC_HOST_myminio = "http://$($env:MINIO_ACCESS_KEY):$($env:MINIO_SECRET_KEY)@localhost:9000"
             
-            try {
-              $objects = .\mc.exe ls --recursive "myminio/${bucket}/" --json 2>&1 | 
-                Where-Object { $_ -match '^\{' } | 
-                ConvertFrom-Json
+            $cutoffDate = (Get-Date).AddDays(-7)
+            
+            $buckets = @('cd-logs', 'cd-artifacts')
+            foreach ($bucket in $buckets) {
+              Write-Host "Checking bucket: $bucket"
               
-              foreach ($obj in $objects) {
-                if ($obj.lastModified) {
-                  $objDate = [DateTime]::Parse($obj.lastModified)
-                  if ($objDate -lt $cutoffDate) {
-                    Write-Host "Removing: $($obj.key)"
-                    .\mc.exe rm "myminio/${bucket}/$($obj.key)" 2>&1 | Out-Null
+              try {
+                $objects = .\mc.exe ls --recursive "myminio/${bucket}/" --json 2>&1 | 
+                  Where-Object { $_ -match '^\{' } | 
+                  ConvertFrom-Json
+                
+                foreach ($obj in $objects) {
+                  if ($obj.lastModified) {
+                    $objDate = [DateTime]::Parse($obj.lastModified)
+                    if ($objDate -lt $cutoffDate) {
+                      Write-Host "Removing: $($obj.key)"
+                      .\mc.exe rm "myminio/${bucket}/$($obj.key)" 2>&1 | Out-Null
+                    }
                   }
                 }
+              } catch {
+                Write-Host "[WARNING] Could not clean bucket $bucket - $_"
               }
-            } catch {
-              Write-Host "Warning: Could not clean bucket $bucket - $_"
             }
+            
+            Write-Host "[OK] Cleanup complete"
+          } catch {
+            Write-Host "[WARNING] Cleanup failed: $_"
           }
-          
-          Write-Host "✓ Cleanup complete"
