@@ -2,4 +2,9 @@ verification_service/faiss_index/driver_vectors.index
 verification_service/faiss_index/thumbs/
 models/
 .env
-*.envngrok
+serve/.env
+*.pyc
+__pycache__/
+.venv/
+logs/
+*.log
