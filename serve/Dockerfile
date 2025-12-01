@@ -10,6 +10,7 @@ RUN --mount=type=cache,target=/var/cache/apt \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements first (for better caching)
+# If your file is actually requirements.txt, rename or change this line
 COPY requirement.txt /app/requirement.txt
 
 # Upgrade pip (cached)
@@ -23,14 +24,14 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 
 # Install other requirements (cached) with increased timeout
 RUN --mount=type=cache,target=/root/.cache/pip \
-    grep -v "^torch" requirement.txt > requirements_no_torch.txt || cp requirement.txt requirements_no_torch.txt && \
-    pip install --default-timeout=600 -r requirements_no_torch.txt
+    grep -v "^torch" /app/requirement.txt > /app/requirements_no_torch.txt || cp /app/requirement.txt /app/requirements_no_torch.txt && \
+    pip install --default-timeout=600 -r /app/requirements_no_torch.txt
 
-# Copy application code
-COPY verification_service /app/verification_service
-COPY serve/entrypoint.sh /app/entrypoint.sh
-
-RUN chmod +x /app/entrypoint.sh
+# Copy app code and entrypoint
+COPY serve/ /app/
+# Make sure entrypoint is present and executable
+RUN test -f /app/entrypoint.sh && chmod +x /app/entrypoint.sh
+# Default command (or entrypoint) to run the script
+ENTRYPOINT ["/app/entrypoint.sh"]
 
 EXPOSE 8000
-ENTRYPOINT ["/app/entrypoint.sh"]

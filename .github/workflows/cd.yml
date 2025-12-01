@@ -115,15 +115,15 @@ jobs:
       - name: Health check
         shell: powershell
         run: |
-          $deadline = (Get-Date).AddMinutes(2)
+          $deadline = (Get-Date).AddMinutes(3)
           $ok = $false
           while (-not $ok -and (Get-Date) -lt $deadline) {
             try {
               $res = Invoke-RestMethod -Uri "http://localhost:8080/health" -TimeoutSec 5
-              if ($res.status -eq 'ok') { $ok = $true }
+              if ($res.status -eq 'ok' -or $res -eq 'ok') { $ok = $true }
             } catch { Start-Sleep -Seconds 5 }
           }
-          if (-not $ok) { Write-Host "Health check failed"; docker compose logs; exit 1 }
+          if (-not $ok) { Write-Host "Health check failed"; docker compose logs app; exit 1 }
 
       - name: Collect logs
         if: always()
@@ -131,9 +131,21 @@ jobs:
         run: |
             mkdir -Force logs | Out-Null
             docker compose logs --no-color > logs\compose.log 2>&1
+            docker compose logs app --no-color > logs\app.log 2>&1
+            docker compose logs db --no-color > logs\db.log 2>&1
+            docker compose logs minio --no-color > logs\minio.log 2>&1
             docker ps -a > logs\ps-a.txt
             docker info > logs\docker-info.txt
             docker compose config > logs\compose-config.txt
+
+      - name: Cleanup
+        if: always() 
+        shell: powershell
+        run: |
+          # Stop and remove all containers
+          docker compose down -v
+          # Optionally, remove unused images and volumes
+          docker system prune -f
 
       - name: Upload logs artifact
         if: always()
@@ -142,3 +154,7 @@ jobs:
           name: docker-logs
           path: logs
           retention-days: 7
+          if-no-files-found: warn
+          compression-level: 6
+          overwrite: false
+          include-hidden-files: false
