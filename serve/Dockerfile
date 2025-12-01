@@ -1,37 +1,60 @@
 # syntax=docker/dockerfile:1
-FROM python:3.9-slim
+FROM python:3.9-slim AS builder
 
 WORKDIR /app
 
 # Install system dependencies
-RUN --mount=type=cache,target=/var/cache/apt \
-    apt-get update && apt-get install -y --no-install-recommends \
-    libgl1 postgresql-client curl build-essential netcat-openbsd \
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        curl \
+        git \
+        libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements first (for better caching)
-# If your file is actually requirements.txt, rename or change this line
+# Copy requirements
 COPY requirement.txt /app/requirement.txt
 
-# Upgrade pip (cached)
+# Upgrade pip with longer timeout
 RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install --upgrade pip setuptools wheel
+    pip install --default-timeout=1200 --upgrade pip setuptools wheel
 
-# Install PyTorch CPU (cached layer) with increased timeout
+# Install PyTorch CPU version with retry logic and cache
 RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install --default-timeout=600 \
-    torch==2.0.1 torchvision==0.15.2 --index-url https://download.pytorch.org/whl/cpu
+    pip install --default-timeout=1200 --retries 10 \
+    torch==2.0.1 torchvision==0.15.2 \
+    --index-url https://download.pytorch.org/whl/cpu
 
-# Install other requirements (cached) with increased timeout
+# Install other requirements (excluding torch)
 RUN --mount=type=cache,target=/root/.cache/pip \
-    grep -v "^torch" /app/requirement.txt > /app/requirements_no_torch.txt || cp /app/requirement.txt /app/requirements_no_torch.txt && \
-    pip install --default-timeout=600 -r /app/requirements_no_torch.txt
+    grep -v "^torch" requirement.txt > requirements_no_torch.txt || cp requirement.txt requirements_no_torch.txt && \
+    pip install --default-timeout=1200 -r requirements_no_torch.txt
 
-# Copy app code and entrypoint
+# Stage: Final image
+FROM python:3.9-slim
+
+WORKDIR /app
+
+# Install runtime system dependencies
+RUN --mount=type=cache,target=/var/cache/apt \
+    apt-get update && apt-get install -y --no-install-recommends \
+    libgl1 postgresql-client curl netcat-openbsd \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy Python packages from builder
+COPY --from=builder /usr/local/lib/python3.9/site-packages /usr/local/lib/python3.9/site-packages
+COPY --from=builder /usr/local/bin /usr/local/bin
+
+# Copy application code
 COPY serve/ /app/
-# Make sure entrypoint is present and executable
+COPY verification_service/ /app/verification_service/
+
+# Make entrypoint executable
 RUN test -f /app/entrypoint.sh && chmod +x /app/entrypoint.sh
-# Default command (or entrypoint) to run the script
-ENTRYPOINT ["/app/entrypoint.sh"]
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+  CMD curl -f http://localhost:8000/health || exit 1
 
 EXPOSE 8000
+
+ENTRYPOINT ["/app/entrypoint.sh"]

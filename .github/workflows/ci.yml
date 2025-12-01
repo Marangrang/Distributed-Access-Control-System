@@ -66,14 +66,73 @@ jobs:
             pytest -q --disable-warnings --maxfail=1 --cov=. --cov-report=xml --cov-report=term; \
           else echo "No tests configured"; fi
 
-      - name: Upload coverage artifact
-        if: always()
-        uses: actions/upload-artifact@v4
+      - name: Check for Python changes
+        id: filter
+        uses: dorny/paths-filter@v2
         with:
-          name: coverage-${{ matrix.python-version }}
-          path: |
-            coverage.xml
-          if-no-files-found: ignore
+          filters: |
+            python:
+              - '**/*.py'
+              - 'requirement.txt'
+              - 'pytest.ini'
+
+      - name: Run pytest
+        if: steps.filter.outputs.python == 'true' && (hashFiles('tests/**') != '' || hashFiles('pytest.ini') != '')
+        run: |
+          pytest -q --disable-warnings --maxfail=1 \
+            --cov=. \
+            --cov-report=xml:coverage.xml \
+            --cov-report=html:htmlcov \
+            --cov-report=term \
+            --junitxml=test-results.xml
+
+      - name: Install MinIO Client
+        if: always()
+        run: |
+          wget -q https://dl.min.io/client/mc/release/linux-amd64/mc
+          chmod +x mc
+          sudo mv mc /usr/local/bin/
+
+      - name: Upload test artifacts to MinIO
+        if: always()
+        env:
+          MINIO_ENDPOINT: ${{ secrets.MINIO_ENDPOINT || 'play.min.io' }}
+          MINIO_ACCESS_KEY: ${{ secrets.MINIO_ACCESS_KEY }}
+          MINIO_SECRET_KEY: ${{ secrets.MINIO_SECRET_KEY }}
+        run: |
+          # Configure MinIO
+          mc alias set myminio https://$MINIO_ENDPOINT $MINIO_ACCESS_KEY $MINIO_SECRET_KEY
+          
+          # Create bucket if not exists
+          mc mb --ignore-existing myminio/ci-artifacts
+          
+          # Create timestamped folder
+          TIMESTAMP=$(date +%Y-%m-%d-%H%M%S)
+          ARTIFACT_PATH="ci-artifacts/${{ github.repository }}/${{ github.ref_name }}/${{ github.run_id }}-${TIMESTAMP}"
+          
+          # Upload test results
+          if [ -f "test-results.xml" ]; then
+            mc cp test-results.xml "myminio/${ARTIFACT_PATH}/"
+          fi
+          
+          # Upload coverage report
+          if [ -f "coverage.xml" ]; then
+            mc cp coverage.xml "myminio/${ARTIFACT_PATH}/"
+          fi
+          
+          # Upload HTML coverage report
+          if [ -d "htmlcov" ]; then
+            mc cp --recursive htmlcov/ "myminio/${ARTIFACT_PATH}/htmlcov/"
+          fi
+          
+          echo "Artifacts uploaded to: ${ARTIFACT_PATH}"
+
+      - name: Upload coverage to Codecov (optional backup)
+        if: hashFiles('coverage.xml') != ''
+        uses: codecov/codecov-action@v3
+        with:
+          file: ./coverage.xml
+          fail_ci_if_error: false
 
   docker-sanity:
     name: Validate Docker build (CPU-only)
