@@ -20,6 +20,50 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Create compose .env from secrets
+        shell: powershell
+        run: |
+          @"
+          DB_NAME=${{ secrets.DB_NAME || 'face_verification_db' }}
+          DB_USER=${{ secrets.DB_USER || 'NWUUSER' }}
+          DB_PASSWORD=${{ secrets.DB_PASSWORD || 'mypassword' }}
+          MINIO_ROOT_USER=${{ secrets.MINIO_ROOT_USER || 'minioadmin' }}
+          MINIO_ROOT_PASSWORD=${{ secrets.MINIO_ROOT_PASSWORD || 'minioadmin' }}
+          MINIO_ACCESS_KEY=${{ secrets.MINIO_ACCESS_KEY || 'minioadmin' }}
+          MINIO_SECRET_KEY=${{ secrets.MINIO_SECRET_KEY || 'minioadmin' }}
+          UVICORN_PORT=8000
+          "@ | Out-File -FilePath .env -Encoding utf8
+
+      - name: Create serve/.env from secrets
+        shell: powershell
+        run: |
+          @"
+          APP_ENV=production
+          APP_DEBUG=false
+          LOG_LEVEL=info
+          DB_HOST=db
+          DB_PORT=5432
+          DB_NAME=${{ secrets.DB_NAME || 'face_verification_db' }}
+          DB_USER=${{ secrets.DB_USER || 'NWUUSER' }}
+          DB_PASSWORD=${{ secrets.DB_PASSWORD || 'mypassword' }}
+          MINIO_ENDPOINT=http://minio:9000
+          MINIO_ACCESS_KEY=${{ secrets.MINIO_ACCESS_KEY || 'minioadmin' }}
+          MINIO_SECRET_KEY=${{ secrets.MINIO_SECRET_KEY || 'minioadmin' }}
+          MINIO_ROOT_USER=${{ secrets.MINIO_ROOT_USER || 'minioadmin' }}
+          MINIO_ROOT_PASSWORD=${{ secrets.MINIO_ROOT_PASSWORD || 'minioadmin' }}
+          MINIO_BUCKET=faiss-index
+          MINIO_REGION=us-east-1
+          SIMILARITY_THRESHOLD=0.7
+          FAISS_INDEX_PATH=verification_service/faiss_index/driver_vectors.index
+          METADATA_PATH=verification_service/faiss_index/metadata.json
+          EMBED_DIM=512
+          K_NEIGHBORS=5
+          UVICORN_WORKERS=2
+          UVICORN_PORT=8000
+          DATA_DIR=/opt/face-verification/data
+          LOG_DIR=/opt/face-verification/logs
+          "@ | Out-File -FilePath serve\.env -Encoding utf8
+
       - name: Ensure Docker Desktop is up
         shell: powershell
         run: |
@@ -50,8 +94,8 @@ jobs:
       - name: Fail if compose file missing
         shell: powershell
         run: |
-          if (-not (Test-Path '.\docker-compose.yml')) {
-            Write-Host "docker-compose.yml not found"
+          if (-not ((Test-Path '.\docker-compose.yml') -or (Test-Path '.\docker-compose.yaml'))) {
+            Write-Host "docker-compose.yml or docker-compose.yaml not found"
             exit 1
           }
 
