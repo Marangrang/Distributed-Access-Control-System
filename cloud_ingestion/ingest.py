@@ -17,10 +17,10 @@ def get_minio_client():
     region = os.environ.get('MINIO_REGION', 'us-east-1')
     return boto3.client(
         's3',
-        endpoint_url=endpoint_url,
-        aws_access_key_id=access_key,
-        aws_secret_access_key=secret_key,
-        region_name=region,
+        endpoint_url='http://minio:9000',
+        aws_access_key_id='minioadmin',
+        aws_secret_access_key='minioadmin',
+        region_name='us-east-1',
     )
 
 

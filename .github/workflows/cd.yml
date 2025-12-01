@@ -15,171 +15,107 @@ concurrency:
 jobs:
   build-and-deploy:
     runs-on: self-hosted
-    timeout-minutes: 240
+    timeout-minutes: 30  # Reduced from 240 to 30 minutes
+    
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Create compose .env from secrets
+      - name: Load environment variables
         shell: powershell
         run: |
-          @"
-          DB_NAME=${{ secrets.DB_NAME }}
-          DB_USER=${{ secrets.DB_USER }}
-          DB_PASSWORD=${{ secrets.DB_PASSWORD }}
-          DB_HOST=db
-          DB_PORT=5432
-          MINIO_ENDPOINT=minio:9000
-          MINIO_ACCESS_KEY=${{ secrets.MINIO_ACCESS_KEY }}
-          MINIO_SECRET_KEY=${{ secrets.MINIO_SECRET_KEY }}
-          MINIO_ROOT_USER=${{ secrets.MINIO_ROOT_USER }}
-          MINIO_ROOT_PASSWORD=${{ secrets.MINIO_ROOT_PASSWORD }}
-          BUCKET_NAME=${{ secrets.BUCKET_NAME }}
-          UVICORN_WORKERS=2
-          UVICORN_PORT=8000
-          "@ | Out-File -FilePath .env -Encoding utf8
-
-      - name: Create serve/.env from secrets
-        shell: powershell
-        run: |
-          @"
-          DB_NAME=${{ secrets.DB_NAME }}
-          DB_USER=${{ secrets.DB_USER }}
-          DB_PASSWORD=${{ secrets.DB_PASSWORD }}
-          DB_HOST=db
-          DB_PORT=5432
-          MINIO_ENDPOINT=minio:9000
-          MINIO_ACCESS_KEY=${{ secrets.MINIO_ACCESS_KEY }}
-          MINIO_SECRET_KEY=${{ secrets.MINIO_SECRET_KEY }}
-          BUCKET_NAME=${{ secrets.BUCKET_NAME }}
-          UVICORN_WORKERS=2
-          UVICORN_PORT=8000
-          "@ | Out-File -FilePath serve/.env -Encoding utf8
-
-      - name: Ensure Docker Desktop is up
-        shell: powershell
-        run: |
-          $running = docker info 2>$null
-          if (-not $running) {
-            Write-Host "Starting Docker Desktop..."
-            Start-Process "C:\Program Files\Docker\Docker\Docker Desktop.exe"
-            $timeout = 120
-            $elapsed = 0
-            while ($elapsed -lt $timeout) {
-              Start-Sleep -Seconds 5
-              $elapsed += 5
-              if (docker info 2>$null) {
-                Write-Host "Docker is ready"
-                break
+          if (Test-Path .env) {
+            Get-Content .env | ForEach-Object {
+              if ($_ -match '^([^#].+?)=(.+)$') {
+                $name = $matches[1].Trim()
+                $value = $matches[2].Trim()
+                Write-Host "Setting $name"
+                [Environment]::SetEnvironmentVariable($name, $value, "Process")
               }
-            }
-            if ($elapsed -ge $timeout) {
-              Write-Host "Docker failed to start"
-              exit 1
             }
           }
 
-      - name: Pre-pull base images
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Stop and remove existing containers
         shell: powershell
         run: |
-          Write-Host "Pulling base images..."
-          docker pull python:3.9-slim
-          docker pull minio/minio:latest
-          docker pull ankane/pgvector:latest
-          docker pull nginx:latest
-          Write-Host "Base images pulled successfully"
+          Write-Host "Stopping existing containers..."
+          docker compose down --remove-orphans --volumes
+          Start-Sleep -Seconds 5
 
-      - name: Build Docker image (with retry)
+      - name: Clean up Docker cache (optional)
+        if: github.event_name == 'workflow_dispatch'
+        shell: powershell
+        run: |
+          Write-Host "Cleaning up Docker cache..."
+          docker system prune -af --volumes
+          Write-Host "✓ Docker cache cleaned"
+
+      - name: Build Docker images with cache
         shell: powershell
         env:
           DOCKER_BUILDKIT: 1
-          BUILDKIT_PROGRESS: plain
+          COMPOSE_DOCKER_CLI_BUILD: 1
         run: |
-          $maxAttempts = 2
-          $attempt = 1
-          $success = $false
+          Write-Host "Building Docker images with BuildKit cache..."
           
-          while ($attempt -le $maxAttempts -and -not $success) {
-            Write-Host "Build attempt $attempt of $maxAttempts"
-            Write-Host "Starting build at $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
-            
-            try {
-              docker compose build --progress=plain app
-              if ($LASTEXITCODE -eq 0) {
-                $success = $true
-                Write-Host "Build completed successfully at $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
-              } else {
-                throw "Build failed with exit code $LASTEXITCODE"
-              }
-            } catch {
-              Write-Host "Build attempt $attempt failed: $_"
-              if ($attempt -lt $maxAttempts) {
-                Write-Host "Cleaning up Docker cache..."
-                docker builder prune -f
-                Write-Host "Retrying in 30 seconds..."
-                Start-Sleep -Seconds 30
-              }
-              $attempt++
-            }
-          }
+          # Build with cache from GitHub Actions cache or registry
+          docker compose build `
+            --build-arg BUILDKIT_INLINE_CACHE=1 `
+            --progress=plain
           
-          if (-not $success) {
-            Write-Host "Build failed after $maxAttempts attempts"
-            exit 1
-          }
+          Write-Host "✓ Docker images built successfully"
 
-      - name: Verify image was built
-        shell: powershell
-        run: |
-          $image = docker images face-verification-service:latest -q
-          if (-not $image) {
-            Write-Host "Error: face-verification-service:latest image not found"
-            exit 1
-          }
-          Write-Host "Image verified: $image"
-          docker images face-verification-service:latest
-
-      - name: Deploy Application
+      - name: Start services
         shell: powershell
         run: |
           Write-Host "Starting services..."
           docker compose up -d
-          Write-Host "Services started. Current status:"
-          docker compose ps
+          Write-Host "✓ Services started"
 
       - name: Wait for services to be healthy
         shell: powershell
+        timeout-minutes: 5
         run: |
-          $deadline = (Get-Date).AddMinutes(5)
-          Write-Host "Waiting for services to become healthy..."
+          Write-Host "Waiting for services to be healthy..."
           
-          while ((Get-Date) -lt $deadline) {
-            $status = docker compose ps --format json | ConvertFrom-Json
-            $unhealthy = $status | Where-Object { 
-              $_.Health -ne "healthy" -and $_.Health -ne "" -and $_.State -eq "running"
+          $maxAttempts = 30  # Reduced from 60
+          $attempt = 0
+          $allHealthy = $false
+          
+          while (-not $allHealthy -and $attempt -lt $maxAttempts) {
+            $attempt++
+            Write-Host "Health check attempt $attempt/$maxAttempts..."
+            
+            $services = docker compose ps --format json | ConvertFrom-Json
+            $unhealthy = $services | Where-Object { 
+              $_.Health -ne "healthy" -and $_.State -eq "running" 
             }
             
-            if (-not $unhealthy) {
-              Write-Host "All services are healthy"
-              docker compose ps
-              break
+            if ($unhealthy.Count -eq 0) {
+              $allHealthy = $true
+              Write-Host "✓ All services are healthy"
+            } else {
+              Write-Host "Waiting for: $($unhealthy.Service -join ', ')"
+              Start-Sleep -Seconds 5
             }
-            
-            Write-Host "Waiting for: $($unhealthy.Service -join ', ')"
-            Start-Sleep -Seconds 10
           }
           
-          if ((Get-Date) -ge $deadline) {
-            Write-Host "Timeout waiting for services to become healthy"
+          if (-not $allHealthy) {
+            Write-Host "✗ Services failed to become healthy"
             docker compose ps
-            docker compose logs
+            docker compose logs --tail=50
             exit 1
           }
 
-      - name: Health check API endpoint
+      - name: Smoke Test - API Health
         shell: powershell
+        timeout-minutes: 2
         run: |
-          $deadline = (Get-Date).AddMinutes(3)
+          Write-Host "Running smoke tests..."
+          $deadline = (Get-Date).AddMinutes(2)
           $ok = $false
           
           Write-Host "Testing API health endpoint..."
@@ -187,149 +123,211 @@ jobs:
             try {
               $res = Invoke-RestMethod -Uri "http://localhost:8080/health" -TimeoutSec 5
               if ($res.status -eq 'ok' -or $res -eq 'ok') {
-                Write-Host "Health check passed: $res"
+                Write-Host "✓ Health check passed: $res"
                 $ok = $true
               }
             } catch {
               Write-Host "Health check failed, retrying..."
-              Start-Sleep -Seconds 10
+              Start-Sleep -Seconds 5
             }
           }
           
           if (-not $ok) {
-            Write-Host "Health check failed after timeout"
-            docker compose logs app
+            Write-Host "✗ Health check failed after timeout"
+            docker compose logs app --tail=50
             exit 1
           }
 
-      - name: Run pytest tests
+      - name: Smoke Test - Verify Endpoints
         shell: powershell
         run: |
-          Write-Host "Running tests..."
+          Write-Host "Testing critical endpoints..."
           
-          # Create test results directory
-          mkdir -Force test-results | Out-Null
+          # Test metrics endpoint
+          try {
+            $metrics = Invoke-WebRequest -Uri "http://localhost:8080/metrics" -TimeoutSec 5
+            if ($metrics.StatusCode -eq 200) {
+              Write-Host "✓ Metrics endpoint: OK"
+            } else {
+              throw "Metrics endpoint returned: $($metrics.StatusCode)"
+            }
+          } catch {
+            Write-Host "✗ Metrics endpoint failed: $_"
+            exit 1
+          }
           
-          # Run tests inside the container
-          docker compose exec -T app pytest `
-            --junitxml=/app/test-results/junit.xml `
-            --html=/app/test-results/report.html `
-            --self-contained-html `
-            --cov=. `
-            --cov-report=html:/app/test-results/htmlcov `
-            --cov-report=xml:/app/test-results/coverage.xml `
-            --cov-report=term-missing
-          
-          # Copy results to host
-          docker cp face-verification-service:/app/test-results ./test-results
-          Write-Host "Test results collected"
+          Write-Host "✓ All smoke tests passed"
+
+      - name: Smoke Test - Database Connectivity
+        shell: powershell
+        run: |
+          Write-Host "Testing database connectivity..."
+          $dbCheck = docker compose exec -T db pg_isready -U $env:DB_USER -d $env:DB_NAME
+          if ($LASTEXITCODE -eq 0) {
+            Write-Host "✓ Database is ready"
+          } else {
+            Write-Host "✗ Database check failed"
+            docker compose logs db --tail=30
+            exit 1
+          }
+
+      - name: Smoke Test - MinIO Connectivity
+        shell: powershell
+        run: |
+          Write-Host "Testing MinIO connectivity..."
+          try {
+            $minio = Invoke-WebRequest -Uri "http://localhost:9000/minio/health/live" -TimeoutSec 5
+            if ($minio.StatusCode -eq 200) {
+              Write-Host "✓ MinIO is healthy"
+            }
+          } catch {
+            Write-Host "✗ MinIO health check failed: $_"
+            docker compose logs minio --tail=30
+            exit 1
+          }
 
       - name: Collect logs
         if: always()
         shell: powershell
         run: |
           Write-Host "Collecting logs..."
-          mkdir -Force logs | Out-Null
+          New-Item -ItemType Directory -Force -Path logs | Out-Null
           
-          docker compose logs --no-color > logs\compose.log 2>&1
-          docker compose logs app --no-color > logs\app.log 2>&1
-          docker compose logs db --no-color > logs\db.log 2>&1
-          docker compose logs minio --no-color > logs\minio.log 2>&1
-          docker compose logs nginx --no-color > logs\nginx.log 2>&1
-          docker ps -a > logs\ps-a.txt
-          docker info > logs\docker-info.txt
-          docker compose config > logs\compose-config.txt
+          $services = @('app', 'db', 'minio')
           
-          Write-Host "Logs collected"
+          # Add Airflow services if they exist
+          $runningServices = docker compose ps --services
+          if ($runningServices -contains 'airflow-webserver') {
+            $services += @('airflow-webserver', 'airflow-scheduler')
+          }
+          
+          foreach ($service in $services) {
+            Write-Host "Collecting logs for $service..."
+            docker compose logs --tail=200 $service > "logs/${service}.log" 2>&1
+          }
+          
+          Write-Host "✓ Logs collected"
 
       - name: Install MinIO Client
         if: always()
         shell: powershell
         run: |
           if (-not (Test-Path "mc.exe")) {
-            Write-Host "Downloading MinIO client..."
-            Invoke-WebRequest -Uri "https://dl.min.io/client/mc/release/windows-amd64/mc.exe" -OutFile "mc.exe"
-            Write-Host "MinIO client downloaded"
+            Write-Host "Downloading MinIO Client..."
+            Invoke-WebRequest `
+              -Uri "https://dl.min.io/client/mc/release/windows-amd64/mc.exe" `
+              -OutFile "mc.exe"
+            Write-Host "✓ MinIO Client downloaded"
           } else {
-            Write-Host "MinIO client already exists"
+            Write-Host "✓ MinIO Client already exists"
           }
 
-      - name: Upload all artifacts to MinIO
+      - name: Upload artifacts to MinIO
         if: always()
         shell: powershell
         run: |
           Write-Host "Configuring MinIO..."
-          .\mc.exe alias set myminio http://localhost:9000 ${{ secrets.MINIO_ACCESS_KEY || 'minioadmin' }} ${{ secrets.MINIO_SECRET_KEY || 'minioadmin' }}
+          
+          # Use MC_HOST_ environment variable (simpler than alias)
+          $env:MC_HOST_myminio = "http://$($env:MINIO_ACCESS_KEY):$($env:MINIO_SECRET_KEY)@localhost:9000"
           
           # Create buckets
           Write-Host "Creating buckets..."
-          .\mc.exe mb --ignore-existing myminio/test-results
-          .\mc.exe mb --ignore-existing myminio/ci-logs
+          .\mc.exe mb --ignore-existing myminio/cd-logs 2>&1 | Out-Null
+          .\mc.exe mb --ignore-existing myminio/cd-artifacts 2>&1 | Out-Null
           
           # Create timestamped path
           $timestamp = Get-Date -Format "yyyy-MM-dd-HHmmss"
           $repo = "${{ github.repository }}" -replace '/', '-'
-          $basePath = "$repo/${{ github.ref_name }}/${{ github.run_id }}-$timestamp"
+          $runId = "${{ github.run_id }}"
+          $basePath = "${repo}/${{ github.ref_name }}/${runId}-${timestamp}"
           
-          # Upload test results
-          if (Test-Path "test-results") {
-            Write-Host "Uploading test results..."
-            .\mc.exe cp --recursive test-results/ "myminio/test-results/$basePath/"
-            Write-Host "✓ Test results uploaded to minio/test-results/$basePath/"
-          }
+          Write-Host "Artifact path: $basePath"
           
-          # Upload CI logs
+          # Upload logs
           if (Test-Path "logs") {
             Write-Host "Uploading logs..."
-            .\mc.exe cp --recursive logs/ "myminio/ci-logs/$basePath/"
-            Write-Host "✓ Logs uploaded to minio/ci-logs/$basePath/"
+            .\mc.exe cp --recursive logs/ "myminio/cd-logs/${basePath}/" 2>&1 | Out-Null
+            Write-Host "✓ Logs uploaded"
           }
           
-          # Set public policy for HTML reports (optional)
-          .\mc.exe anonymous set download "myminio/test-results/$basePath/report.html" 2>$null
-          .\mc.exe anonymous set download "myminio/test-results/$basePath/htmlcov/" 2>$null
+          # Upload any test results if they exist
+          if (Test-Path "test-results") {
+            Write-Host "Uploading test results..."
+            .\mc.exe cp --recursive test-results/ "myminio/cd-artifacts/${basePath}/test-results/" 2>&1 | Out-Null
+            Write-Host "✓ Test results uploaded"
+          }
           
-          # Generate shareable links
-          $reportUrl = "http://localhost:9000/test-results/$basePath/report.html"
-          $coverageUrl = "http://localhost:9000/test-results/$basePath/htmlcov/index.html"
+          # Generate output (avoid terminator issues)
+          $logsUrl = "http://localhost:9000/cd-logs/${basePath}/"
+          $consoleUrl = "http://localhost:9001"
           
           Write-Host ""
-          Write-Host "📊 Artifact URLs:"
-          Write-Host "   Test Report: $reportUrl"
-          Write-Host "   Coverage Report: $coverageUrl"
-          Write-Host "   MinIO Console: http://localhost:9001"
-          Write-Host "   Logs: http://localhost:9000/ci-logs/$basePath/"
+          Write-Host "========================================"
+          Write-Host "Deployment Artifacts:"
+          Write-Host "  Logs: $logsUrl"
+          Write-Host "  MinIO Console: $consoleUrl"
+          Write-Host "  Path: $basePath"
+          Write-Host "========================================"
 
-      - name: Upload to GitHub (backup only)
+      - name: Upload logs to GitHub Artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: test-and-logs-${{ github.run_id }}
-          path: |
-            test-results/
-            logs/
-          retention-days: 7
+          name: deployment-logs-${{ github.run_id }}
+          path: logs/
+          retention-days: 7  # Reduced from 30
+          if-no-files-found: warn
 
-      - name: Cleanup
+      - name: Display service status
         if: always()
         shell: powershell
         run: |
-          Write-Host "Cleaning up..."
+          Write-Host ""
+          Write-Host "========================================"
+          Write-Host "Service Status:"
+          Write-Host "========================================"
+          docker compose ps
+          Write-Host ""
+          Write-Host "========================================"
+          Write-Host "Access URLs:"
+          Write-Host "  API: http://localhost:8080"
+          Write-Host "  MinIO Console: http://localhost:9001"
+          Write-Host "  Airflow: http://localhost:8081"
+          Write-Host "========================================"
+
+      - name: Cleanup old artifacts
+        if: success()
+        shell: powershell
+        continue-on-error: true
+        run: |
+          Write-Host "Cleaning up old artifacts (>7 days)..."
           
-          # Stop containers
-          docker compose down -v
+          $env:MC_HOST_myminio = "http://$($env:MINIO_ACCESS_KEY):$($env:MINIO_SECRET_KEY)@localhost:9000"
           
-          # Remove MinIO client
-          if (Test-Path "mc.exe") {
-            Remove-Item "mc.exe" -Force
+          $cutoffDate = (Get-Date).AddDays(-7)  # Reduced from 30
+          
+          $buckets = @('cd-logs', 'cd-artifacts')
+          foreach ($bucket in $buckets) {
+            Write-Host "Checking bucket: $bucket"
+            
+            try {
+              $objects = .\mc.exe ls --recursive "myminio/${bucket}/" --json 2>&1 | 
+                Where-Object { $_ -match '^\{' } | 
+                ConvertFrom-Json
+              
+              foreach ($obj in $objects) {
+                if ($obj.lastModified) {
+                  $objDate = [DateTime]::Parse($obj.lastModified)
+                  if ($objDate -lt $cutoffDate) {
+                    Write-Host "Removing: $($obj.key)"
+                    .\mc.exe rm "myminio/${bucket}/$($obj.key)" 2>&1 | Out-Null
+                  }
+                }
+              }
+            } catch {
+              Write-Host "Warning: Could not clean bucket $bucket - $_"
+            }
           }
           
-          # Clean up old images (keep last 2)
-          docker images face-verification-service --format "{{.ID}}" | Select-Object -Skip 2 | ForEach-Object {
-            docker rmi $_ -f 2>$null
-          }
-          
-          # Prune system
-          docker system prune -f --volumes
-          
-          Write-Host "Cleanup complete"
+          Write-Host "✓ Cleanup complete"

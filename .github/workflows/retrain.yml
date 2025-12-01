@@ -19,7 +19,7 @@ jobs:
       - name: Install training deps
         run: |
           python -m pip install --upgrade pip
-          if [ -f train/requirements.txt ]; then pip install -r train/requirements.txt; fi
+          if [ -f train/requirement.txt ]; then pip install -r train/requirements.txt; fi
 
       - name: Rebuild FAISS index
         run: |

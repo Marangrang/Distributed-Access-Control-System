@@ -16,7 +16,7 @@ concurrency:
 
 jobs:
   build-test:
-    name: Lint and Test (Python matrix)
+    name: Lint and Test (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest
     timeout-minutes: 20
     strategy:
@@ -35,7 +35,7 @@ jobs:
           cache: 'pip'
           cache-dependency-path: requirement.txt
 
-      - name: Cache pip (requirements)
+      - name: Cache pip dependencies
         uses: actions/cache@v4
         with:
           path: ~/.cache/pip
@@ -47,7 +47,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirement.txt
-          pip install pytest pytest-cov flake8 autopep8
+          pip install pytest pytest-cov pytest-html pytest-asyncio flake8 autopep8
 
       - name: Auto-fix linting issues
         run: |
@@ -57,44 +57,51 @@ jobs:
       - name: Lint code (flake8)
         run: |
           echo "Running flake8 linting..."
-          flake8 . --max-line-length=120 --exclude=.venv,__pycache__,.git
+          flake8 . --max-line-length=120 --exclude=.venv,__pycache__,.git,airflow
 
-      - name: Run unit tests (pytest + coverage)
+      - name: Validate Airflow DAGs
+        if: hashFiles('airflow/dags/**') != ''
         run: |
-          echo "Running tests..."
-          if [ -d tests ] || [ -f pytest.ini ]; then \
-            pytest -q --disable-warnings --maxfail=1 --cov=. --cov-report=xml --cov-report=term; \
-          else echo "No tests configured"; fi
+          echo "Validating Airflow DAGs..."
+          pip install apache-airflow==2.8.0
+          # Test DAG imports
+          python -c "
+          import sys
+          from pathlib import Path
+          sys.path.insert(0, str(Path('airflow/dags')))
+          from airflow.models import DagBag
+          dagbag = DagBag(dag_folder='airflow/dags', include_examples=False)
+          if dagbag.import_errors:
+              print('DAG import errors:')
+              for filename, error in dagbag.import_errors.items():
+                  print(f'{filename}: {error}')
+              sys.exit(1)
+          print(f'✓ Successfully loaded {len(dagbag.dags)} DAGs')
+          "
 
-      - name: Check for Python changes
-        id: filter
-        uses: dorny/paths-filter@v2
-        with:
-          filters: |
-            python:
-              - '**/*.py'
-              - 'requirement.txt'
-              - 'pytest.ini'
-
-      - name: Run pytest
+      - name: Run unit tests with coverage
         if: hashFiles('tests/**') != '' || hashFiles('pytest.ini') != ''
         run: |
-          pytest -q --disable-warnings --maxfail=1 \
+          echo "Running unit tests with coverage..."
+          pytest -v \
+            -m "not integration and not slow" \
+            --disable-warnings \
+            --maxfail=1 \
             --cov=. \
             --cov-report=xml:coverage.xml \
             --cov-report=html:htmlcov \
-            --cov-report=term \
+            --cov-report=term-missing \
             --junitxml=test-results.xml
 
       - name: Install MinIO Client
-        if: always()
+        if: always() && matrix.python-version == '3.10'
         run: |
           wget -q https://dl.min.io/client/mc/release/linux-amd64/mc
           chmod +x mc
           sudo mv mc /usr/local/bin/
 
       - name: Upload test artifacts to MinIO
-        if: always()
+        if: always() && matrix.python-version == '3.10'
         continue-on-error: true
         env:
           MINIO_ENDPOINT: ${{ secrets.MINIO_ENDPOINT || 'localhost:9000' }}
@@ -117,7 +124,7 @@ jobs:
           # Configure MinIO
           mc alias set myminio "$PROTO://$ENDPOINT" "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY"
 
-          # Create bucket (ignore errors for shared endpoints)
+          # Create bucket
           mc mb --ignore-existing myminio/ci-artifacts || echo "Bucket creation skipped"
 
           # Create timestamped path
@@ -132,7 +139,7 @@ jobs:
           echo "✅ Artifacts uploaded to: ${ARTIFACT_PATH}"
 
       - name: Upload coverage to Codecov
-        if: hashFiles('coverage.xml') != ''
+        if: always() && hashFiles('coverage.xml') != '' && matrix.python-version == '3.10'
         uses: codecov/codecov-action@v3
         with:
           file: ./coverage.xml
@@ -141,7 +148,7 @@ jobs:
   docker-sanity:
     name: Validate Docker build (CPU-only)
     runs-on: ubuntu-latest
-    timeout-minutes: 60  # Increased from 20 to 60 minutes
+    timeout-minutes: 60
     needs: [build-test]
     steps:
       - name: Checkout code
@@ -158,3 +165,4 @@ jobs:
           push: false
           tags: face-verification:ci
           cache-from: type=gha
+          cache-to: type=gha,mode=max

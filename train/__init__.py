@@ -1,1 +1,1 @@
-# train package placeholder
+# Train module initialization
