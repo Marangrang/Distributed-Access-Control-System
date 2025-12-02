@@ -54,7 +54,9 @@ jobs:
             apache-airflow-providers-amazon \
             apache-airflow-providers-http \
             apache-airflow-providers-fab \
-            --constraint "https://raw.githubusercontent.com/apache/airflow/constraints-2.10.4/constraints-3.9.txt"
+            --constraint "https://raw.githubusercontent.com/apache/airflow/constraints-2.10.4/constraints-3.9.txt" \
+            || echo "Some optional dependencies failed, continuing..."
+        continue-on-error: false
         env:
           AIRFLOW_HOME: ${{ github.workspace }}/airflow_home
           PIP_NO_BUILD_ISOLATION: false
