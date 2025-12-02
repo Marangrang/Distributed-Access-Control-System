@@ -17,7 +17,6 @@ pydantic==2.10.6
 pydantic-core==2.27.2
 
 ## Database
-sqlalchemy==2.0.36
 psycopg2-binary==2.9.11
 greenlet==3.2.4
 
@@ -58,6 +57,7 @@ typing-extensions==4.15.0
 
 ## Core Airflow
 apache-airflow==2.10.4
+sqlalchemy==1.4.54
 
 ## Airflow Providers:
 apache-airflow-providers-postgres==5.14.0
