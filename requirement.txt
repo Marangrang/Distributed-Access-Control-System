@@ -65,12 +65,7 @@ apache-airflow-providers-postgres==5.14.0
 apache-airflow-providers-amazon==9.1.0
 apache-airflow-providers-http==4.13.3
 apache-airflow-providers-fab==1.5.1
-apache-airflow-providers-common-sql, common-io, common-compat
-apache-airflow-providers-ftp, imap, smtp, sqlite
 
 ## AWS/Cloud Dependencies:
 boto3==1.35.36
 botocore==1.35.36
-watchtower (CloudWatch logging)
-PyAthena (AWS Athena)
-redshift_connector (AWS Redshift)
