@@ -60,76 +60,18 @@ jobs:
         run: |
           echo "Validating Airflow DAGs..."
           
-          # Install Airflow with required providers (skip google-re2)
-          pip install --no-deps \
-            apache-airflow==2.8.0 \
-            apache-airflow-providers-postgres==5.10.0 \
-            apache-airflow-providers-amazon==8.16.0 \
-            apache-airflow-providers-http==4.9.0
+          # Use Airflow 2.10.4 (no google-re2 dependency)
+          AIRFLOW_VERSION=2.10.4
+          PYTHON_VERSION="$(python --version | cut -d " " -f 2 | cut -d "." -f 1-2)"
+          CONSTRAINT_URL="https://raw.githubusercontent.com/apache/airflow/constraints-${AIRFLOW_VERSION}/constraints-${PYTHON_VERSION}.txt"
           
-          # Install Airflow dependencies excluding google-re2
-          pip install \
-            alembic \
-            argcomplete \
-            asgiref \
-            attrs \
-            blinker \
-            colorlog \
-            configupdater \
-            connexion \
-            cron-descriptor \
-            croniter \
-            cryptography \
-            deprecated \
-            dill \
-            flask \
-            flask-appbuilder \
-            flask-caching \
-            flask-login \
-            flask-session \
-            flask-wtf \
-            fsspec \
-            graphviz \
-            gunicorn \
-            httpx \
-            itsdangerous \
-            jinja2 \
-            jsonschema \
-            lazy-object-proxy \
-            linkify-it-py \
-            lockfile \
-            markdown \
-            markdown-it-py \
-            markupsafe \
-            marshmallow-oneofschema \
-            mdit-py-plugins \
-            opentelemetry-api \
-            opentelemetry-exporter-otlp \
-            packaging \
-            pathspec \
-            pendulum \
-            pluggy \
-            psutil \
-            pydantic \
-            pygments \
-            pyjwt \
-            python-daemon \
-            python-dateutil \
-            python-nvd3 \
-            python-slugify \
-            rfc3339-validator \
-            rich \
-            rich-argparse \
-            setproctitle \
-            sqlalchemy \
-            sqlalchemy-jsonfield \
-            tabulate \
-            tenacity \
-            termcolor \
-            typing-extensions \
-            unicodecsv \
-            universal-pathlib \
-            werkzeug
+          echo "Installing Airflow ${AIRFLOW_VERSION} with constraints for Python ${PYTHON_VERSION}"
+          
+          pip install "apache-airflow==${AIRFLOW_VERSION}" \
+            "apache-airflow-providers-postgres>=5.10.0" \
+            "apache-airflow-providers-amazon>=8.16.0" \
+            "apache-airflow-providers-http>=4.9.0" \
+            --constraint "${CONSTRAINT_URL}"
           
           # Set AIRFLOW_HOME
           export AIRFLOW_HOME=$(pwd)/airflow_home
