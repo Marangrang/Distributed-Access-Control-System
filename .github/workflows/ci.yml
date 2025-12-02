@@ -2,9 +2,9 @@ name: CI - Build, Lint, Test and Docker Sanity
 
 on:
   push:
-    branches: [ main, develop ]
+    branches: [main, develop]
   pull_request:
-    branches: [ main, develop ]
+    branches: [main, develop]
   workflow_dispatch:
 
 permissions:
@@ -22,7 +22,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: [ '3.9', '3.10', '3.11' ]
+        python-version: ["3.9", "3.10", "3.11"]
 
     steps:
       - name: Checkout code
@@ -32,7 +32,7 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-          cache: 'pip'
+          cache: "pip"
           cache-dependency-path: requirement.txt
 
       - name: Install dependencies
@@ -41,6 +41,23 @@ jobs:
           pip install --upgrade typing-extensions
           pip install -r requirement.txt
           pip install pytest pytest-cov pytest-html pytest-asyncio flake8 autopep8
+
+      - name: Install Airflow and dependencies
+        run: |
+          pip install --upgrade pip setuptools wheel
+
+          # Skip problematic packages
+          export AIRFLOW_INSTALL_WITHOUT_GOOGLE_RE2=true
+
+          pip install "apache-airflow==2.10.4" \
+            apache-airflow-providers-postgres \
+            apache-airflow-providers-amazon \
+            apache-airflow-providers-http \
+            apache-airflow-providers-fab \
+            --constraint "https://raw.githubusercontent.com/apache/airflow/constraints-2.10.4/constraints-3.9.txt"
+        env:
+          AIRFLOW_HOME: ${{ github.workspace }}/airflow_home
+          PIP_NO_BUILD_ISOLATION: false
 
       - name: Lint code (flake8)
         continue-on-error: false
@@ -52,43 +69,43 @@ jobs:
         if: hashFiles('airflow/dags/**') != ''
         run: |
           echo "Validating Airflow DAGs..."
-          
+
           AIRFLOW_VERSION=2.10.4
           PYTHON_VERSION="$(python --version | cut -d " " -f 2 | cut -d "." -f 1-2)"
           CONSTRAINT_URL="https://raw.githubusercontent.com/apache/airflow/constraints-${AIRFLOW_VERSION}/constraints-${PYTHON_VERSION}.txt"
-          
+
           echo "Installing Airflow ${AIRFLOW_VERSION} for Python ${PYTHON_VERSION}"
-          
+
           pip install "apache-airflow==${AIRFLOW_VERSION}" \
             "apache-airflow-providers-postgres>=5.10.0" \
             "apache-airflow-providers-amazon>=8.16.0" \
             "apache-airflow-providers-http>=4.9.0" \
             --constraint "${CONSTRAINT_URL}"
-          
+
           export AIRFLOW_HOME=$(pwd)/airflow_home
           mkdir -p $AIRFLOW_HOME
-          
+
           airflow db migrate 2>/dev/null || airflow db init
-          
+
           # Validate DAG imports only
           python << 'EOF'
           import sys
           from pathlib import Path
-          
+
           sys.path.insert(0, str(Path('airflow/dags')))
-          
+
           from airflow.models import DagBag
-          
+
           print("Loading DAGs from airflow/dags...")
           dagbag = DagBag(dag_folder='airflow/dags', include_examples=False)
-          
+
           if dagbag.import_errors:
               print("\n❌ DAG import errors found:")
               for filename, error in dagbag.import_errors.items():
                   print(f"\nFile: {filename}")
                   print(f"Error: {error}")
               sys.exit(1)
-          
+
           print(f"\n✅ Successfully validated {len(dagbag.dags)} DAG(s):")
           for dag_id in dagbag.dags.keys():
               dag = dagbag.dags[dag_id]
