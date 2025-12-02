@@ -66,6 +66,7 @@ jobs:
           CONSTRAINT_URL="https://raw.githubusercontent.com/apache/airflow/constraints-${AIRFLOW_VERSION}/constraints-${PYTHON_VERSION}.txt"
           
           echo "Installing Airflow ${AIRFLOW_VERSION} with constraints for Python ${PYTHON_VERSION}"
+          echo "Constraint URL: ${CONSTRAINT_URL}"
           
           pip install "apache-airflow==${AIRFLOW_VERSION}" \
             "apache-airflow-providers-postgres>=5.10.0" \
