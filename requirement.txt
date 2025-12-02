@@ -9,7 +9,6 @@ scikit-learn==1.6.1
 scipy==1.13.1
 
 ## Web Framework & API
-
 fastapi==0.123.4
 uvicorn==0.38.0
 starlette==0.49.3
@@ -54,17 +53,3 @@ python-multipart==0.0.20
 prometheus-client==0.23.1
 tqdm==4.67.1
 typing-extensions>=4.12.0
-
-## Core Airflow
-apache-airflow==2.10.4
-sqlalchemy==1.4.54
-
-## Airflow Providers:
-apache-airflow-providers-postgres==5.14.0
-apache-airflow-providers-amazon==9.1.0
-apache-airflow-providers-http==4.13.3
-apache-airflow-providers-fab==1.5.1
-
-## AWS/Cloud Dependencies:
-boto3==1.35.36
-botocore==1.35.36
