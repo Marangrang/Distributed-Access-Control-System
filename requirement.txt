@@ -29,7 +29,7 @@ bcrypt==4.2.1
 cffi==2.0.0
 
 ## HTTP & Networking
-httpx==0.28.1 
+httpx==0.28.1
 httpcore==1.0.9
 requests==2.32.5
 urllib3==2.5.0
@@ -55,3 +55,25 @@ python-multipart==0.0.20
 prometheus-client==0.23.1
 tqdm==4.67.1
 typing-extensions==4.15.0
+
+## Core Airflow
+apache-airflow==2.10.4
+alembic (database migrations)
+flask, werkzeug (web framework)
+sqlalchemy==1.4.54
+gunicorn (WSGI server)
+
+## Airflow Providers:
+apache-airflow-providers-postgres==5.14.0
+apache-airflow-providers-amazon==9.1.0
+apache-airflow-providers-http==4.13.3
+apache-airflow-providers-fab==1.5.1 (Flask AppBuilder)
+apache-airflow-providers-common-sql, common-io, common-compat
+apache-airflow-providers-ftp, imap, smtp, sqlite
+
+## AWS/Cloud Dependencies:
+boto3==1.35.36
+botocore==1.35.36
+watchtower (CloudWatch logging)
+PyAthena (AWS Athena)
+redshift_connector (AWS Redshift)

@@ -136,9 +136,9 @@ class TestIngestionPipelineDAG:
     def test_dag_has_required_tasks(self, dag):
         """Test that DAG has all required tasks."""
         required_tasks = [
-            'start',
-            'ingest_data',
-            'end'
+            'create_ingestion_log_table',
+            'ingest_from_cloud_storage',
+            'log_ingestion_result'
         ]
         task_ids = [task.task_id for task in dag.tasks]
         for task_id in required_tasks:
