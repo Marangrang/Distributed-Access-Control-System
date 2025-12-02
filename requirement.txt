@@ -58,16 +58,13 @@ typing-extensions==4.15.0
 
 ## Core Airflow
 apache-airflow==2.10.4
-alembic (database migrations)
-flask, werkzeug (web framework)
 sqlalchemy==1.4.54
-gunicorn (WSGI server)
 
 ## Airflow Providers:
 apache-airflow-providers-postgres==5.14.0
 apache-airflow-providers-amazon==9.1.0
 apache-airflow-providers-http==4.13.3
-apache-airflow-providers-fab==1.5.1 (Flask AppBuilder)
+apache-airflow-providers-fab==1.5.1
 apache-airflow-providers-common-sql, common-io, common-compat
 apache-airflow-providers-ftp, imap, smtp, sqlite
 
