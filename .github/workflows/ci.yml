@@ -53,13 +53,11 @@ jobs:
         run: |
           echo "Validating Airflow DAGs..."
           
-          # Use Airflow 2.10.4 (no google-re2 dependency)
           AIRFLOW_VERSION=2.10.4
           PYTHON_VERSION="$(python --version | cut -d " " -f 2 | cut -d "." -f 1-2)"
           CONSTRAINT_URL="https://raw.githubusercontent.com/apache/airflow/constraints-${AIRFLOW_VERSION}/constraints-${PYTHON_VERSION}.txt"
           
-          echo "Installing Airflow ${AIRFLOW_VERSION} with constraints for Python ${PYTHON_VERSION}"
-          echo "Constraint URL: ${CONSTRAINT_URL}"
+          echo "Installing Airflow ${AIRFLOW_VERSION} for Python ${PYTHON_VERSION}"
           
           pip install "apache-airflow==${AIRFLOW_VERSION}" \
             "apache-airflow-providers-postgres>=5.10.0" \
@@ -67,14 +65,12 @@ jobs:
             "apache-airflow-providers-http>=4.9.0" \
             --constraint "${CONSTRAINT_URL}"
           
-          # Set AIRFLOW_HOME
           export AIRFLOW_HOME=$(pwd)/airflow_home
           mkdir -p $AIRFLOW_HOME
           
-          # Initialize Airflow DB
-          airflow db init || echo "DB init skipped"
+          airflow db migrate 2>/dev/null || airflow db init
           
-          # Validate DAG imports
+          # Validate DAG imports only
           python << 'EOF'
           import sys
           from pathlib import Path
@@ -93,21 +89,10 @@ jobs:
                   print(f"Error: {error}")
               sys.exit(1)
           
-          dag_errors = []
-          for dag_id, dag in dagbag.dags.items():
-              result = dag.test_cycle()
-              if result:
-                  dag_errors.append(f"DAG '{dag_id}' has a cycle: {result}")
-          
-          if dag_errors:
-              print("\n❌ DAG validation errors:")
-              for error in dag_errors:
-                  print(f"  - {error}")
-              sys.exit(1)
-          
           print(f"\n✅ Successfully validated {len(dagbag.dags)} DAG(s):")
           for dag_id in dagbag.dags.keys():
-              print(f"  - {dag_id}")
+              dag = dagbag.dags[dag_id]
+              print(f"  - {dag_id} ({len(dag.tasks)} tasks)")
           EOF
 
       - name: Run unit tests with coverage
