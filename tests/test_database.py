@@ -1,21 +1,26 @@
 """Test database operations."""
+import os
 import pytest
 import psycopg2
-from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
-import os
 
+# Treat this as an integration test (CI excludes with -m "not integration")
+pytestmark = pytest.mark.integration
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def db_connection():
-    """Create database connection for testing."""
-    conn = psycopg2.connect(
-        host=os.getenv("DB_HOST", "localhost"),
-        port=os.getenv("DB_PORT", "5432"),
-        user=os.getenv("DB_USER", "NWUUSER"),
-        password=os.getenv("DB_PASSWORD", "mypassword"),
-        database=os.getenv("DB_NAME", "face_verification_db")
-    )
-    conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
+    host = os.getenv("DB_HOST", "localhost")
+    port = int(os.getenv("DB_PORT", "5432"))
+    name = os.getenv("DB_NAME", "postgres")
+    user = os.getenv("DB_USER", "postgres")
+    password = os.getenv("DB_PASSWORD", "postgres")
+
+    try:
+        conn = psycopg2.connect(
+            host=host, port=port, dbname=name, user=user, password=password
+        )
+    except psycopg2.OperationalError as e:
+        pytest.skip(f"PostgreSQL not available at {host}:{port}: {e}")
+
     yield conn
     conn.close()
 

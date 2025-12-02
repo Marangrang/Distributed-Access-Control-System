@@ -114,35 +114,6 @@ jobs:
               print(f"  - {dag_id} ({len(dag.tasks)} tasks)")
           EOF
 
-      - name: Validate Airflow DAGs (Docker image)
-        if: hashFiles('airflow/dags/**') != '' && matrix.python-version == '3.10'
-        run: |
-          echo "Validating Airflow DAGs with apache/airflow:2.10.4-python3.9..."
-          docker pull apache/airflow:2.10.4-python3.9
-
-          mkdir -p airflow_home
-          docker run --rm \
-            -e AIRFLOW__CORE__LOAD_EXAMPLES=False \
-            -v "$PWD/airflow/dags:/opt/airflow/dags:ro" \
-            -v "$PWD/airflow_home:/opt/airflow/airflow_home" \
-            apache/airflow:2.10.4-python3.9 bash -lc '
-              airflow db init >/dev/null 2>&1 || true
-              python - << "PY"
-from airflow.models import DagBag
-import sys
-print("Loading DAGs from /opt/airflow/dags...")
-dagbag = DagBag(dag_folder="/opt/airflow/dags", include_examples=False)
-if dagbag.import_errors:
-    print("\n❌ DAG import errors found:")
-    for file, err in dagbag.import_errors.items():
-        print(f"\nFile: {file}\nError: {err}")
-    sys.exit(1)
-print(f"\n✅ Successfully validated {len(dagbag.dags)} DAG(s):")
-for dag_id, dag in dagbag.dags.items():
-    print(f"  - {dag_id} ({len(dag.tasks)} tasks)")
-PY
-            '
-
       - name: Run unit tests with coverage
         if: hashFiles('tests/**') != '' || hashFiles('pytest.ini') != ''
         run: |
@@ -157,8 +128,7 @@ PY
             --cov-report=term-missing \
             --junitxml=test-results.xml \
             --ignore=airflow \
-            --ignore=airflow_home \
-            --ignore=tests/airflow
+            --ignore=airflow_home
 
       - name: Upload coverage to Codecov
         if: always() && hashFiles('coverage.xml') != '' && matrix.python-version == '3.10'
