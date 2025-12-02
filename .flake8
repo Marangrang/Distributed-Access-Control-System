@@ -1,0 +1,12 @@
+[flake8]
+max-line-length = 120
+exclude = 
+    .venv,
+    __pycache__,
+    .git,
+    airflow,
+    airflow_home,
+    node_modules,
+    .pytest_cache,
+    htmlcov
+extend-ignore = E203,W503

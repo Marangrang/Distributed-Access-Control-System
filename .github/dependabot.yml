@@ -1,6 +1,7 @@
 version: 2
 
 updates:
+  # Python dependencies
   - package-ecosystem: "pip"
     directory: "/"
     schedule:
@@ -25,6 +26,24 @@ updates:
       - dependency-name: "streamlit"
         update-types: ["version-update:semver-major"]
 
+  # Docker - serve directory (where Dockerfile actually is)
+  - package-ecosystem: "docker"
+    directory: "/serve"
+    schedule:
+      interval: "weekly"
+      day: "tuesday"
+      time: "04:00"
+    open-pull-requests-limit: 5
+    reviewers:
+      - "ypratap11"
+    commit-message:
+      prefix: "docker"
+      include: "scope"
+    labels:
+      - "dependencies"
+      - "docker"
+
+  # Docker - docker-compose.yaml in root
   - package-ecosystem: "docker"
     directory: "/"
     schedule:
@@ -41,8 +60,9 @@ updates:
       - "dependencies"
       - "docker"
 
+  # GitHub Actions
   - package-ecosystem: "github-actions"
-    directory: "/.github/workflows"
+    directory: "/"
     schedule:
       interval: "weekly"
       day: "wednesday"
@@ -56,27 +76,3 @@ updates:
     labels:
       - "dependencies"
       - "github-actions"
-
-  - package-ecosystem: "gitsubmodule"
-    directory: "/helm"
-    schedule:
-      interval: "weekly"
-      day: "thursday"
-      time: "04:00"
-    open-pull-requests-limit: 3
-    reviewers:
-      - "ypratap11"
-    commit-message:
-      prefix: "helm"
-      include: "scope"
-    labels:
-      - "dependencies"
-      - "helm"
-
-  - package-ecosystem: "docker"
-    directory: "/serve"
-    schedule:
-      interval: "weekly"
-    commit-message:
-      prefix: "docker"
-      include: "scope"
