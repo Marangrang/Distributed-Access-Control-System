@@ -35,17 +35,10 @@ jobs:
           cache: 'pip'
           cache-dependency-path: requirement.txt
 
-      - name: Cache pip dependencies
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ matrix.python-version }}-${{ hashFiles('requirement.txt') }}
-          restore-keys: |
-            ${{ runner.os }}-pip-${{ matrix.python-version }}-
-
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
+          pip install --upgrade typing-extensions
           pip install -r requirement.txt
           pip install pytest pytest-cov pytest-html pytest-asyncio flake8 autopep8
 
