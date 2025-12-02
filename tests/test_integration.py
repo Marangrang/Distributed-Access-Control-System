@@ -32,12 +32,12 @@ def test_full_verification_pipeline(valid_test_image):
 def test_concurrent_requests():
     """Test handling of concurrent requests."""
     import concurrent.futures
-    
+
     def make_request():
         return client.get("/health")
-    
+
     with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
         futures = [executor.submit(make_request) for _ in range(10)]
         results = [f.result() for f in futures]
-    
+
     assert all(r.status_code == 200 for r in results)

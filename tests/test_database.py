@@ -43,7 +43,7 @@ def test_embeddings_table_exists(db_connection):
     cursor = db_connection.cursor()
     cursor.execute("""
         SELECT EXISTS (
-            SELECT FROM information_schema.tables 
+            SELECT FROM information_schema.tables
             WHERE table_name = 'embeddings'
         )
     """)

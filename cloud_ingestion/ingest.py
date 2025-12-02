@@ -20,11 +20,11 @@ def get_cloud_config():
 def ingest_from_cloud(source: str, destination: str) -> bool:
     """
     Ingest data from cloud storage.
-    
+
     Args:
         source: Cloud source path
         destination: Local destination path
-        
+
     Returns:
         True if successful
     """

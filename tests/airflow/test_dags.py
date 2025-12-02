@@ -85,15 +85,15 @@ class TestTrainingPipelineDAG:
     def test_dag_has_required_tasks(self, dag):
         """Test that DAG has all required tasks."""
         required_tasks = [
-            'start',
-            'fetch_images_from_minio',
-            'preprocess_images',
-            'extract_faces',
-            'generate_embeddings',
+            'restart_app_service',
+            'wait_for_service_health',
+            'check_new_training_data',
+            'train_face_recognition_model',
             'build_faiss_index',
-            'save_index_to_minio',
-            'update_database',
-            'end'
+            'upload_artifacts_to_minio',
+            'log_training_metrics',
+            'validate_deployment',
+            'send_notification'
         ]
         task_ids = [task.task_id for task in dag.tasks]
         for task_id in required_tasks:
@@ -102,18 +102,18 @@ class TestTrainingPipelineDAG:
 
     def test_dag_task_dependencies(self, dag):
         """Test task dependencies are correct."""
-        start_task = dag.get_task('start')
-        fetch_task = dag.get_task('fetch_images_from_minio')
-        end_task = dag.get_task('end')
+        restart_task = dag.get_task('restart_app_service')
+        wait_task = dag.get_task('wait_for_service_health')
+        notify_task = dag.get_task('send_notification')
 
-        # Start task should have downstream dependencies
-        assert len(start_task.downstream_task_ids) > 0
+        # Restart task should have downstream dependencies
+        assert len(restart_task.downstream_task_ids) > 0
 
-        # Fetch task should come after start
-        assert 'start' in [t.task_id for t in fetch_task.upstream_list]
+        # Wait task should come after restart
+        assert 'restart_app_service' in [t.task_id for t in wait_task.upstream_list]
 
-        # End task should have upstream dependencies
-        assert len(end_task.upstream_task_ids) > 0
+        # Notify task should have upstream dependencies
+        assert len(notify_task.upstream_task_ids) > 0
 
 
 class TestIngestionPipelineDAG:

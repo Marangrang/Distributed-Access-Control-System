@@ -43,11 +43,11 @@ def test_upload_download_file(minio_client):
     bucket_name = "test-bucket"
     object_name = "test-file.txt"
     content = b"test content"
-    
+
     # Ensure bucket exists
     if not minio_client.bucket_exists(bucket_name):
         minio_client.make_bucket(bucket_name)
-    
+
     # Upload
     minio_client.put_object(
         bucket_name,
@@ -55,11 +55,11 @@ def test_upload_download_file(minio_client):
         io.BytesIO(content),
         len(content)
     )
-    
+
     # Download
     response = minio_client.get_object(bucket_name, object_name)
     downloaded = response.read()
     assert downloaded == content
-    
+
     # Cleanup
     minio_client.remove_object(bucket_name, object_name)
