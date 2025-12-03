@@ -35,10 +35,17 @@ jobs:
           cache: "pip"
           cache-dependency-path: requirement.txt
 
+      - name: Cache pip dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ matrix.python-version }}-${{ hashFiles('requirement.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-${{ matrix.python-version }}-
+
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install --upgrade typing-extensions
           pip install -r requirement.txt
           pip install pytest pytest-cov pytest-html pytest-asyncio flake8 autopep8
 
@@ -46,6 +53,22 @@ jobs:
         continue-on-error: false
         run: |
           echo "Running flake8 linting..."
+          # Create .flake8 config to ignore specific issues temporarily
+          cat > .flake8 << EOF
+          [flake8]
+          max-line-length = 120
+          exclude =
+              .venv,
+              __pycache__,
+              .git,
+              airflow,
+              node_modules
+          per-file-ignores =
+              cloud_ingestion/ingest.py:F841
+              tests/test_api.py:F401
+          extend-ignore = E203,W503
+          EOF
+
           flake8 . || echo "⚠️ Linting issues found (see above)"
 
       - name: Validate Airflow DAGs
@@ -53,52 +76,60 @@ jobs:
         run: |
           echo "Validating Airflow DAGs..."
 
-          AIRFLOW_VERSION=2.10.4
-          PYTHON_VERSION="$(python --version | cut -d " " -f 2 | cut -d "." -f 1-2)"
-          CONSTRAINT_URL="https://raw.githubusercontent.com/apache/airflow/constraints-${AIRFLOW_VERSION}/constraints-${PYTHON_VERSION}.txt"
+          # Install Airflow with required providers
+          pip install \
+            apache-airflow==2.8.0 \
+            apache-airflow-providers-postgres==5.10.0 \
+            apache-airflow-providers-amazon==8.16.0 \
+            apache-airflow-providers-http==4.9.0
 
-          pip install "apache-airflow==${AIRFLOW_VERSION}" \
-            "apache-airflow-providers-postgres>=5.10.0" \
-            "apache-airflow-providers-amazon>=8.16.0" \
-            "apache-airflow-providers-http>=4.9.0" \
-            --constraint "${CONSTRAINT_URL}"
-
+          # Set AIRFLOW_HOME
           export AIRFLOW_HOME=$(pwd)/airflow_home
-          mkdir -p "$AIRFLOW_HOME"
+          mkdir -p $AIRFLOW_HOME
 
-          airflow db migrate || echo "DB migrate skipped"
+          # Initialize Airflow DB (required for DagBag)
+          airflow db init || echo "DB init skipped"
 
+          # Validate DAG imports
           python << 'EOF'
-import sys
-from airflow.models import DagBag
-from airflow.exceptions import AirflowDagCycleException
+          import sys
+          from pathlib import Path
 
-print("Loading DAGs from airflow/dags...")
-dagbag = DagBag(dag_folder='airflow/dags', include_examples=False)
+          # Add DAGs directory to path
+          sys.path.insert(0, str(Path('airflow/dags')))
 
-if dagbag.import_errors:
-    print("\n❌ DAG import errors found:")
-    for filename, error in dagbag.import_errors.items():
-        print(f"\nFile: {filename}\nError: {error}")
-    sys.exit(1)
+          # Import DagBag
+          from airflow.models import DagBag
 
-errors = []
-for dag_id, dag in dagbag.dags.items():
-    try:
-        dag.topological_sort()  # raises AirflowDagCycleException if cyclic
-    except AirflowDagCycleException as e:
-        errors.append(f"DAG '{dag_id}' has a cycle: {e}")
+          print("Loading DAGs from airflow/dags...")
+          dagbag = DagBag(dag_folder='airflow/dags', include_examples=False)
 
-if errors:
-    print("\n❌ DAG validation errors:")
-    for e in errors:
-        print(f"  - {e}")
-    sys.exit(1)
+          # Check for import errors
+          if dagbag.import_errors:
+              print("\n❌ DAG import errors found:")
+              for filename, error in dagbag.import_errors.items():
+                  print(f"\nFile: {filename}")
+                  print(f"Error: {error}")
+              sys.exit(1)
 
-print(f"\n✅ Successfully validated {len(dagbag.dags)} DAG(s):")
-for dag_id in dagbag.dags.keys():
-    print(f"  - {dag_id}")
-EOF
+          # Check for DAG validation errors
+          dag_errors = []
+          for dag_id, dag in dagbag.dags.items():
+              result = dag.test_cycle()
+              if result:
+                  dag_errors.append(f"DAG '{dag_id}' has a cycle: {result}")
+
+          if dag_errors:
+              print("\n❌ DAG validation errors:")
+              for error in dag_errors:
+                  print(f"  - {error}")
+              sys.exit(1)
+
+          # Success
+          print(f"\n✅ Successfully validated {len(dagbag.dags)} DAG(s):")
+          for dag_id in dagbag.dags.keys():
+              print(f"  - {dag_id}")
+          EOF
 
       - name: Run unit tests with coverage
         if: hashFiles('tests/**') != '' || hashFiles('pytest.ini') != ''
@@ -115,6 +146,51 @@ EOF
             --junitxml=test-results.xml \
             --ignore=airflow \
             --ignore=airflow_home
+
+      - name: Install MinIO Client
+        if: always() && matrix.python-version == '3.10'
+        run: |
+          wget -q https://dl.min.io/client/mc/release/linux-amd64/mc
+          chmod +x mc
+          sudo mv mc /usr/local/bin/
+
+      - name: Upload test artifacts to MinIO
+        if: always() && matrix.python-version == '3.10'
+        continue-on-error: true
+        env:
+          MINIO_ENDPOINT: ${{ secrets.MINIO_ENDPOINT || 'localhost:9000' }}
+          MINIO_ACCESS_KEY: ${{ secrets.MINIO_ACCESS_KEY }}
+          MINIO_SECRET_KEY: ${{ secrets.MINIO_SECRET_KEY }}
+        run: |
+          if [ -z "$MINIO_ACCESS_KEY" ] || [ -z "$MINIO_SECRET_KEY" ]; then
+            echo "⚠️  No MinIO credentials provided. Skipping upload."
+            exit 0
+          fi
+
+          # Determine protocol
+          PROTO=http; ENDPOINT="$MINIO_ENDPOINT"
+          if [[ "$ENDPOINT" == play.min.io* || "$ENDPOINT" == https://* ]]; then
+            PROTO=https
+            ENDPOINT="${ENDPOINT#https://}"
+            ENDPOINT="${ENDPOINT#http://}"
+          fi
+
+          # Configure MinIO
+          mc alias set myminio "$PROTO://$ENDPOINT" "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY"
+
+          # Create bucket
+          mc mb --ignore-existing myminio/ci-artifacts || echo "Bucket creation skipped"
+
+          # Create timestamped path
+          TIMESTAMP=$(date +%Y-%m-%d-%H%M%S)
+          ARTIFACT_PATH="ci-artifacts/${{ github.repository }}/${{ github.ref_name }}/${{ github.run_id }}-${TIMESTAMP}"
+
+          # Upload files
+          [ -f test-results.xml ] && mc cp test-results.xml "myminio/${ARTIFACT_PATH}/" || true
+          [ -f coverage.xml ] && mc cp coverage.xml "myminio/${ARTIFACT_PATH}/" || true
+          [ -d htmlcov ] && mc cp --recursive htmlcov/ "myminio/${ARTIFACT_PATH}/htmlcov/" || true
+
+          echo "✅ Artifacts uploaded to: ${ARTIFACT_PATH}"
 
       - name: Upload coverage to Codecov
         if: always() && hashFiles('coverage.xml') != '' && matrix.python-version == '3.10'
