@@ -54,37 +54,36 @@ jobs:
           airflow db migrate || echo "DB migrate skipped"
 
           python << 'EOF'
+import sys
+from airflow.models import DagBag
+from airflow.exceptions import AirflowDagCycleException
 
-          import sys
-          from airflow.models import DagBag
-          from airflow.exceptions import AirflowDagCycleException
+print("Loading DAGs from airflow/dags...")
+dagbag = DagBag(dag_folder='airflow/dags', include_examples=False)
 
-          print("Loading DAGs from airflow/dags...")
-          dagbag = DagBag(dag_folder='airflow/dags', include_examples=False)
+if dagbag.import_errors:
+    print("\n❌ DAG import errors:")
+    for f, e in dagbag.import_errors.items():
+        print(f"  {f}: {e}")
+    sys.exit(1)
 
-          if dagbag.import_errors:
-            print("\n❌ DAG import errors:")
-            for f, e in dagbag.import_errors.items():
-              print(f"  {f}: {e}")
-            sys.exit(1)
+errors = []
 
-          errors = []
+for dag_id, dag in dagbag.dags.items():
+    try:
+        dag.topological_sort()
+    except AirflowDagCycleException as e:
+        errors.append(f"DAG '{dag_id}' has a cycle: {e}")
 
-          for dag_id, dag in dagbag.dags.items():
-            try:
-              dag.topological_sort()
-            except AirflowDagCycleException as e:
-              errors.append(f"DAG '{dag_id}' has a cycle: {e}")
+if errors:
+    print("\n❌ DAG validation errors:")
+    for e in errors:
+        print(f"  {e}")
+    sys.exit(1)
 
-          if errors:
-            print("\n❌ DAG validation errors:")
-            for e in errors:
-              print(f"  {e}")
-            sys.exit(1)
-
-          print(f"\n✅ Validated {len(dagbag.dags)} DAG(s):")
-          for dag_id in dagbag.dags.keys():
-            print(f"  - {dag_id}")
+print(f"\n✅ Validated {len(dagbag.dags)} DAG(s):")
+for dag_id in dagbag.dags.keys():
+    print(f"  - {dag_id}")
 EOF
 
       - name: Run unit tests with coverage
