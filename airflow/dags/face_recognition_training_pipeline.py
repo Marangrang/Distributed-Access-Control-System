@@ -14,6 +14,7 @@ Tags: ml, face-recognition, training, production
 """
 from datetime import datetime, timedelta
 import logging
+from typing import Dict
 from airflow import DAG
 from airflow.operators.python import PythonOperator
 from airflow.providers.common.sql.operators.sql import SQLExecuteQueryOperator
@@ -354,6 +355,7 @@ with DAG(
     """Face Recognition Training Pipeline."""
     from datetime import datetime, timedelta
     import logging
+    from typing import Dict
     from airflow import DAG
     from airflow.operators.python import PythonOperator
     from airflow.providers.common.sql.operators.sql import SQLExecuteQueryOperator
@@ -378,9 +380,19 @@ with DAG(
         catchup=False,
     )
 
+    def get_db_connection() -> Dict[str, str]:
+        """Get database connection details."""
+        return {
+            'host': 'localhost',
+            'database': 'face_recognition',
+            'user': 'airflow',
+            'password': 'airflow'
+        }
+
     def train_model(**kwargs):
         """Train the face recognition model."""
         logger.info("Starting model training")
+        db_config = get_db_connection()
         # Implementation here
         pass
 
