@@ -53,9 +53,13 @@ jobs:
         run: |
           echo "Validating Airflow DAGs..."
 
+          # Use Airflow 2.10.4 (no google-re2 dependency)
           AIRFLOW_VERSION=2.10.4
           PYTHON_VERSION="$(python --version | cut -d " " -f 2 | cut -d "." -f 1-2)"
           CONSTRAINT_URL="https://raw.githubusercontent.com/apache/airflow/constraints-${AIRFLOW_VERSION}/constraints-${PYTHON_VERSION}.txt"
+
+          echo "Installing Airflow ${AIRFLOW_VERSION} with constraints for Python ${PYTHON_VERSION}"
+          echo "Constraint URL: ${CONSTRAINT_URL}"
 
           pip install "apache-airflow==${AIRFLOW_VERSION}" \
             "apache-airflow-providers-postgres>=5.10.0" \
@@ -63,43 +67,48 @@ jobs:
             "apache-airflow-providers-http>=4.9.0" \
             --constraint "${CONSTRAINT_URL}"
 
+          # Set AIRFLOW_HOME
           export AIRFLOW_HOME=$(pwd)/airflow_home
-          mkdir -p "$AIRFLOW_HOME"
+          mkdir -p $AIRFLOW_HOME
 
-          airflow db migrate || echo "DB migrate skipped"
+          # Initialize Airflow DB
+          airflow db init || echo "DB init skipped"
 
+          # Validate DAG imports
           python << 'EOF'
-import sys
-from airflow.models import DagBag
-from airflow.exceptions import AirflowDagCycleException
+          import sys
+          from pathlib import Path
 
-print("Loading DAGs from airflow/dags...")
-dagbag = DagBag(dag_folder='airflow/dags', include_examples=False)
+          sys.path.insert(0, str(Path('airflow/dags')))
 
-if dagbag.import_errors:
-    print("\n❌ DAG import errors found:")
-    for filename, error in dagbag.import_errors.items():
-        print(f"\nFile: {filename}\nError: {error}")
-    sys.exit(1)
+          from airflow.models import DagBag
 
-errors = []
-for dag_id, dag in dagbag.dags.items():
-    try:
-        # Detect cycles by attempting a topological sort
-        dag.topological_sort()
-    except AirflowDagCycleException as e:
-        errors.append(f"DAG '{dag_id}' has a cycle: {e}")
+          print("Loading DAGs from airflow/dags...")
+          dagbag = DagBag(dag_folder='airflow/dags', include_examples=False)
 
-if errors:
-    print("\n❌ DAG validation errors:")
-    for e in errors:
-        print(f"  - {e}")
-    sys.exit(1)
+          if dagbag.import_errors:
+              print("\n❌ DAG import errors found:")
+              for filename, error in dagbag.import_errors.items():
+                  print(f"\nFile: {filename}")
+                  print(f"Error: {error}")
+              sys.exit(1)
 
-print(f"\n✅ Successfully validated {len(dagbag.dags)} DAG(s):")
-for dag_id in dagbag.dags.keys():
-    print(f"  - {dag_id}")
-EOF
+          dag_errors = []
+          for dag_id, dag in dagbag.dags.items():
+              result = dag.test_cycle()
+              if result:
+                  dag_errors.append(f"DAG '{dag_id}' has a cycle: {result}")
+
+          if dag_errors:
+              print("\n❌ DAG validation errors:")
+              for error in dag_errors:
+                  print(f"  - {error}")
+              sys.exit(1)
+
+          print(f"\n✅ Successfully validated {len(dagbag.dags)} DAG(s):")
+          for dag_id in dagbag.dags.keys():
+              print(f"  - {dag_id}")
+          EOF
 
       - name: Run unit tests with coverage
         if: hashFiles('tests/**') != '' || hashFiles('pytest.ini') != ''
