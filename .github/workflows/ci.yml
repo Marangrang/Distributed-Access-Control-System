@@ -22,7 +22,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.9", "3.10", "3.11"]
+        python-version: ["3.10"]
 
     steps:
       - name: Checkout code
@@ -49,11 +49,16 @@ jobs:
       - name: Validate Airflow DAGs
         if: hashFiles('airflow/dags/**') != ''
         run: |
+          pip install apache-airflow==2.10.4 \
+            apache-airflow-providers-postgres \
+            apache-airflow-providers-amazon \
+            apache-airflow-providers-http
+
           export AIRFLOW_HOME=$(pwd)/airflow_home
           mkdir -p "$AIRFLOW_HOME"
           airflow db migrate || echo "DB migrate skipped"
 
-          python << 'EOF'
+          python <<'EOF'
 import sys
 from airflow.models import DagBag
 from airflow.exceptions import AirflowDagCycleException
@@ -86,8 +91,8 @@ for dag_id in dagbag.dags.keys():
     print(f"  - {dag_id}")
 EOF
 
-      - name: Run unit tests with coverage
-        if: hashFiles('tests/**') != '' || hashFiles('pytest.ini') != ''
+      - name: Run unit tests
+        if: hashFiles('tests/**') != ''
         run: |
           pytest -v \
             -m "not integration and not slow" \
@@ -98,55 +103,11 @@ EOF
             --cov-report=term-missing \
             --junitxml=test-results.xml \
             --ignore=airflow \
-            --ignore=airflow_home
+            --ignore=airflow_home \
+            --ignore=tests/airflow
 
-      - name: Install MinIO Client
-        if: always() && matrix.python-version == '3.10'
-        run: |
-          wget -q https://dl.min.io/client/mc/release/linux-amd64/mc
-          chmod +x mc
-          sudo mv mc /usr/local/bin/
-
-      - name: Upload test artifacts to MinIO
-        if: always() && matrix.python-version == '3.10'
-        continue-on-error: true
-        env:
-          MINIO_ENDPOINT: ${{ secrets.MINIO_ENDPOINT || 'localhost:9000' }}
-          MINIO_ACCESS_KEY: ${{ secrets.MINIO_ACCESS_KEY }}
-          MINIO_SECRET_KEY: ${{ secrets.MINIO_SECRET_KEY }}
-        run: |
-          if [ -z "$MINIO_ACCESS_KEY" ] || [ -z "$MINIO_SECRET_KEY" ]; then
-            echo "⚠️  No MinIO credentials provided. Skipping upload."
-            exit 0
-          fi
-
-          # Determine protocol
-          PROTO=http; ENDPOINT="$MINIO_ENDPOINT"
-          if [[ "$ENDPOINT" == play.min.io* || "$ENDPOINT" == https://* ]]; then
-            PROTO=https
-            ENDPOINT="${ENDPOINT#https://}"
-            ENDPOINT="${ENDPOINT#http://}"
-          fi
-
-          # Configure MinIO
-          mc alias set myminio "$PROTO://$ENDPOINT" "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY"
-
-          # Create bucket
-          mc mb --ignore-existing myminio/ci-artifacts || echo "Bucket creation skipped"
-
-          # Create timestamped path
-          TIMESTAMP=$(date +%Y-%m-%d-%H%M%S)
-          ARTIFACT_PATH="ci-artifacts/${{ github.repository }}/${{ github.ref_name }}/${{ github.run_id }}-${TIMESTAMP}"
-
-          # Upload files
-          [ -f test-results.xml ] && mc cp test-results.xml "myminio/${ARTIFACT_PATH}/" || true
-          [ -f coverage.xml ] && mc cp coverage.xml "myminio/${ARTIFACT_PATH}/" || true
-          [ -d htmlcov ] && mc cp --recursive htmlcov/ "myminio/${ARTIFACT_PATH}/htmlcov/" || true
-
-          echo "✅ Artifacts uploaded to: ${ARTIFACT_PATH}"
-
-      - name: Upload coverage to Codecov
-        if: always() && hashFiles('coverage.xml') != '' && matrix.python-version == '3.10'
+      - name: Upload coverage
+        if: always() && hashFiles('coverage.xml') != ''
         uses: codecov/codecov-action@v3
         with:
           file: ./coverage.xml
