@@ -27,8 +27,9 @@ def test_minio_connection(minio_client):
         pytest.fail(f"MinIO connection failed: {e}")
 
 
+@pytest.mark.integration
 def test_bucket_exists(minio_client):
-    """Test that required bucket exists or can be created."""
+    """Test bucket existence check."""
     bucket_name = "test-bucket"
     try:
         if not minio_client.bucket_exists(bucket_name):
