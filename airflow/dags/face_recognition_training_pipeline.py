@@ -13,10 +13,9 @@ Owner: Data Engineering Team
 Tags: ml, face-recognition, training, production
 """
 from datetime import datetime, timedelta
-import logging
-from typing import Dict, Any
-
 from airflow import DAG
+from airflow.operators.python import PythonOperator
+from airflow.providers.common.sql.operators.sql import SQLExecuteQueryOperator
 from airflow.decorators import task
 from airflow.operators.bash import BashOperator
 from airflow.providers.http.sensors.http import HttpSensor
@@ -52,7 +51,7 @@ def cleanup_xcom(context, session=None):
 def get_db_connection() -> Dict[str, str]:
     """
     Retrieve database connection from Airflow connections.
-    
+
     Returns:
         Dict containing database connection parameters
     """
@@ -73,7 +72,7 @@ def get_db_connection() -> Dict[str, str]:
 def get_minio_connection() -> Dict[str, str]:
     """
     Retrieve MinIO connection from Airflow connections.
-    
+
     Returns:
         Dict containing MinIO connection parameters
     """
@@ -104,27 +103,27 @@ with DAG(
     def check_new_training_data(**context) -> bool:
         """
         Check if new training data is available in MinIO.
-        
+
         Returns:
             bool: True if new data exists, False otherwise
         """
         try:
             from minio import Minio
-            
+
             # Get connection from Airflow (not hardcoded)
             minio_conn = get_minio_connection()
-            
+
             client = Minio(
                 minio_conn['endpoint'],
                 access_key=minio_conn['access_key'],
                 secret_key=minio_conn['secret_key'],
                 secure=False
             )
-            
+
             # Check for new images in training bucket
             bucket_name = "{{ var.value.get('training_bucket', 'training-data') }}"
             objects = list(client.list_objects(bucket_name, recursive=True))
-            
+
             if len(objects) > 0:
                 logger.info(f"✓ Found {len(objects)} training images")
                 # Push count to XCom for downstream tasks
@@ -133,7 +132,7 @@ with DAG(
             else:
                 logger.info("No new training data found")
                 return False
-                
+
         except Exception as e:
             logger.error(f"Error checking training data: {str(e)}")
             raise
@@ -142,7 +141,7 @@ with DAG(
     def train_face_recognition_model(**context) -> Dict[str, Any]:
         """
         Train the face recognition model using new data.
-        
+
         Returns:
             Dict containing training metrics
         """
@@ -150,27 +149,27 @@ with DAG(
             import sys
             sys.path.append('/opt/airflow/train')
             from train import train_face_recognition_model
-            
+
             # Get training data count from previous task
             data_count = context['ti'].xcom_pull(
                 task_ids='check_new_training_data',
                 key='training_data_count'
             )
-            
+
             logger.info(f"Starting model training with {data_count} images...")
-            
+
             # Train model (function should return metrics)
             metrics = train_face_recognition_model()
-            
+
             logger.info(f"✓ Model training completed: {metrics}")
-            
+
             return {
                 'status': 'success',
                 'images_processed': data_count,
                 'accuracy': metrics.get('accuracy', 'N/A'),
                 'training_time': metrics.get('training_time', 'N/A'),
             }
-            
+
         except Exception as e:
             logger.error(f"Model training failed: {str(e)}")
             raise
@@ -179,7 +178,7 @@ with DAG(
     def build_faiss_index(**context) -> str:
         """
         Build FAISS index from trained embeddings.
-        
+
         Returns:
             str: Path to the built index
         """
@@ -187,15 +186,15 @@ with DAG(
             import sys
             sys.path.append('/opt/airflow/verification_service')
             from build_index import build_faiss_index as build_index
-            
+
             logger.info("Building FAISS index...")
-            
+
             index_path = build_index()
-            
+
             logger.info(f"✓ FAISS index built: {index_path}")
-            
+
             return index_path
-            
+
         except Exception as e:
             logger.error(f"FAISS index build failed: {str(e)}")
             raise
@@ -204,10 +203,10 @@ with DAG(
     def upload_artifacts_to_minio(index_path: str, **context) -> bool:
         """
         Upload trained model and FAISS index to MinIO.
-        
+
         Args:
             index_path: Path to the FAISS index file
-            
+
         Returns:
             bool: True if upload successful
         """
@@ -215,16 +214,16 @@ with DAG(
             import sys
             sys.path.append('/opt/airflow/train')
             from upload_index_to_minio import upload_index_to_minio
-            
+
             logger.info(f"Uploading artifacts from {index_path} to MinIO...")
-            
+
             # Upload using connection (not hardcoded credentials)
             upload_index_to_minio(index_path)
-            
+
             logger.info("✓ Artifacts uploaded successfully")
-            
+
             return True
-            
+
         except Exception as e:
             logger.error(f"Artifact upload failed: {str(e)}")
             raise
@@ -235,25 +234,25 @@ with DAG(
         try:
             import psycopg2
             from psycopg2.extras import RealDictCursor
-            
+
             # Get metrics from previous task
             training_metrics = context['ti'].xcom_pull(
                 task_ids='train_face_recognition_model'
             )
-            
+
             # Get DB connection
             db_conn = get_db_connection()
-            
+
             conn = psycopg2.connect(**db_conn)
             cursor = conn.cursor(cursor_factory=RealDictCursor)
-            
+
             # Insert metrics
             insert_query = """
-                INSERT INTO training_metrics 
+                INSERT INTO training_metrics
                 (training_date, images_processed, accuracy, training_time, status)
                 VALUES (NOW(), %s, %s, %s, %s)
             """
-            
+
             cursor.execute(
                 insert_query,
                 (
@@ -263,13 +262,13 @@ with DAG(
                     training_metrics['status']
                 )
             )
-            
+
             conn.commit()
             cursor.close()
             conn.close()
-            
+
             logger.info("✓ Training metrics logged to database")
-            
+
         except Exception as e:
             logger.error(f"Failed to log metrics: {str(e)}")
             # Don't fail the pipeline if logging fails
@@ -296,23 +295,23 @@ with DAG(
     def validate_deployment(**context) -> Dict[str, str]:
         """
         Validate the deployed service is working correctly.
-        
+
         Returns:
             Dict with validation results
         """
         try:
             import requests
-            
+
             base_url = "{{ var.value.get('app_base_url', 'http://localhost:8000') }}"
-            
+
             # Test health endpoint
             health_response = requests.get(f'{base_url}/health', timeout=10)
             health_status = health_response.status_code == 200
-            
+
             # Test metrics endpoint
             metrics_response = requests.get(f'{base_url}/metrics', timeout=10)
             metrics_status = metrics_response.status_code == 200
-            
+
             if health_status and metrics_status:
                 logger.info("✓ All validation checks passed")
                 return {
@@ -322,7 +321,7 @@ with DAG(
                 }
             else:
                 raise Exception("Validation checks failed")
-                
+
         except Exception as e:
             logger.error(f"Deployment validation failed: {str(e)}")
             raise
@@ -333,7 +332,7 @@ with DAG(
         try:
             logger.info(f"Pipeline completed successfully: {validation_result}")
             # Add your notification logic here (Slack, email, etc.)
-            
+
         except Exception as e:
             logger.error(f"Failed to send notification: {str(e)}")
 
@@ -342,11 +341,11 @@ with DAG(
     training_result = train_face_recognition_model()
     index_path = build_faiss_index()
     upload_result = upload_artifacts_to_minio(index_path)
-    
+
     # Traditional task dependencies
     data_available >> training_result >> index_path >> upload_result
     upload_result >> log_training_metrics()
     upload_result >> restart_service >> wait_for_health
-    
+
     validation_result = validate_deployment()
     wait_for_health >> validation_result >> send_notification(validation_result)

@@ -13,6 +13,9 @@ from airflow import DAG
 from airflow.decorators import task
 from airflow.providers.postgres.operators.postgres import PostgresOperator
 from airflow.providers.postgres.hooks.postgres import PostgresHook
+from airflow.providers.common.sql.operators.sql import SQLExecuteQueryOperator
+from airflow.providers.amazon.aws.hooks.s3 import S3Hook
+import os
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +44,7 @@ with DAG(
     def ingest_from_cloud_storage(**context) -> int:
         """
         Ingest data from cloud storage (S3, Azure Blob, etc.).
-        
+
         Returns:
             int: Number of files ingested
         """
@@ -49,18 +52,18 @@ with DAG(
             import sys
             sys.path.append('/opt/airflow/cloud_ingestion')
             from ingest import ingest_face_data
-            
+
             logger.info("Starting cloud data ingestion...")
-            
+
             # Get source from Airflow Variable (not hardcoded)
             source = "{{ var.value.get('ingestion_source', 's3') }}"
-            
+
             files_ingested = ingest_face_data(source=source)
-            
+
             logger.info(f"✓ Ingested {files_ingested} files")
-            
+
             return files_ingested
-            
+
         except Exception as e:
             logger.error(f"Cloud ingestion failed: {str(e)}")
             raise
@@ -86,19 +89,19 @@ with DAG(
         """Log ingestion results to database."""
         try:
             postgres_hook = PostgresHook(postgres_conn_id='face_verification_db')
-            
+
             insert_query = """
                 INSERT INTO ingestion_log (ingestion_date, status, record_count, source)
                 VALUES (NOW(), %s, %s, %s);
             """
-            
+
             postgres_hook.run(
                 insert_query,
                 parameters=('completed', files_count, 'cloud_storage')
             )
-            
+
             logger.info(f"✓ Logged {files_count} ingested files to database")
-            
+
         except Exception as e:
             logger.error(f"Failed to log ingestion: {str(e)}")
             raise
@@ -106,3 +109,18 @@ with DAG(
     # Define task dependencies
     files_ingested = ingest_from_cloud_storage()
     create_log_table >> files_ingested >> log_ingestion_result(files_ingested)
+
+    create_table = SQLExecuteQueryOperator(
+        task_id='create_face_data_table',
+        conn_id='postgres_default',
+        sql=""",
+        CREATE TABLE IF NOT EXISTS face_embeddings (
+            id SERIAL PRIMARY KEY,
+            user_id VARCHAR(255),
+            embedding_vector FLOAT8[],
+            image_path VARCHAR(500),
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        """,
+        dag=dag,
+    )
