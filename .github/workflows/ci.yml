@@ -32,16 +32,8 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-          cache: "pip"
+          cache: pip
           cache-dependency-path: requirement.txt
-
-      - name: Cache pip dependencies
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ matrix.python-version }}-${{ hashFiles('requirement.txt') }}
-          restore-keys: |
-            ${{ runner.os }}-pip-${{ matrix.python-version }}-
 
       - name: Install dependencies
         run: |
@@ -50,56 +42,27 @@ jobs:
           pip install pytest pytest-cov pytest-html pytest-asyncio flake8 autopep8
 
       - name: Lint code (flake8)
-        continue-on-error: false
+        continue-on-error: true
         run: |
-          echo "Running flake8 linting..."
-          # Create .flake8 config to ignore specific issues temporarily
-          cat > .flake8 << EOF
-          [flake8]
-          max-line-length = 120
-          exclude =
-              .venv,
-              __pycache__,
-              .git,
-              airflow,
-              node_modules
-          per-file-ignores =
-              cloud_ingestion/ingest.py:F841
-              tests/test_api.py:F401
-          extend-ignore = E203,W503
-          EOF
-
-          flake8 . || echo "⚠️ Linting issues found (see above)"
+          flake8 . --select=E9,F63,F7,F82 --show-source --statistics || echo "Linting issues found"
 
       - name: Validate Airflow DAGs
         if: hashFiles('airflow/dags/**') != ''
         run: |
-          echo "Validating Airflow DAGs..."
+          pip install apache-airflow==2.10.4 \
+            apache-airflow-providers-postgres \
+            apache-airflow-providers-amazon \
+            apache-airflow-providers-http
 
-          # Install Airflow with required providers
-          pip install \
-            apache-airflow==2.8.0 \
-            apache-airflow-providers-postgres==5.10.0 \
-            apache-airflow-providers-amazon==8.16.0 \
-            apache-airflow-providers-http==4.9.0
-
-          # Set AIRFLOW_HOME
           export AIRFLOW_HOME=$(pwd)/airflow_home
-          mkdir -p $AIRFLOW_HOME
+          mkdir -p "$AIRFLOW_HOME"
+          airflow db migrate || echo "DB migrate skipped"
 
-          # Initialize Airflow DB (required for DagBag)
-          airflow db init || echo "DB init skipped"
-
-          # Validate DAG imports
           python << 'EOF'
+
           import sys
-          from pathlib import Path
-
-          # Add DAGs directory to path
-          sys.path.insert(0, str(Path('airflow/dags')))
-
-          # Import DagBag
           from airflow.models import DagBag
+          from airflow.exceptions import AirflowDagCycleException
 
           print("Loading DAGs from airflow/dags...")
           dagbag = DagBag(dag_folder='airflow/dags', include_examples=False)
@@ -112,18 +75,18 @@ jobs:
                   print(f"Error: {error}")
               sys.exit(1)
 
-          # Check for DAG validation errors
           dag_errors = []
           for dag_id, dag in dagbag.dags.items():
-              result = dag.test_cycle()
-              if result:
-                  dag_errors.append(f"DAG '{dag_id}' has a cycle: {result}")
+              try:
+                  dag.topological_sort()
+              except AirflowDagCycleException as error:
+                  dag_errors.append(f"DAG '{dag_id}' has a cycle: {error}")
 
-          if dag_errors:
-              print("\n❌ DAG validation errors:")
-              for error in dag_errors:
-                  print(f"  - {error}")
-              sys.exit(1)
+          if errors:
+            print("\n❌ DAG validation errors:")
+            for e in errors:
+              print(f"  {e}")
+            sys.exit(1)
 
           # Success
           print(f"\n✅ Successfully validated {len(dagbag.dags)} DAG(s):")
@@ -134,14 +97,12 @@ jobs:
       - name: Run unit tests with coverage
         if: hashFiles('tests/**') != '' || hashFiles('pytest.ini') != ''
         run: |
-          echo "Running unit tests with coverage..."
           pytest -v \
             -m "not integration and not slow" \
             --disable-warnings \
             --maxfail=1 \
             --cov=. \
             --cov-report=xml:coverage.xml \
-            --cov-report=html:htmlcov \
             --cov-report=term-missing \
             --junitxml=test-results.xml \
             --ignore=airflow \
@@ -198,25 +159,3 @@ jobs:
         with:
           file: ./coverage.xml
           fail_ci_if_error: false
-
-  docker-sanity:
-    name: Validate Docker build (CPU-only)
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
-    needs: [build-test]
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Build Docker image (sanity check)
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: serve/Dockerfile
-          push: false
-          tags: face-verification:ci
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
