@@ -17,7 +17,7 @@ def minio_client():
     )
     return client
 
-
+@pytest.mark.integration
 def test_minio_connection(minio_client):
     """Test MinIO connectivity."""
     try:
