@@ -49,11 +49,6 @@ jobs:
       - name: Validate Airflow DAGs
         if: hashFiles('airflow/dags/**') != ''
         run: |
-          pip install apache-airflow==2.10.4 \
-            apache-airflow-providers-postgres \
-            apache-airflow-providers-amazon \
-            apache-airflow-providers-http
-
           export AIRFLOW_HOME=$(pwd)/airflow_home
           mkdir -p "$AIRFLOW_HOME"
           airflow db migrate || echo "DB migrate skipped"
@@ -67,20 +62,19 @@ jobs:
           print("Loading DAGs from airflow/dags...")
           dagbag = DagBag(dag_folder='airflow/dags', include_examples=False)
 
-          # Check for import errors
           if dagbag.import_errors:
-              print("\n❌ DAG import errors found:")
-              for filename, error in dagbag.import_errors.items():
-                  print(f"\nFile: {filename}")
-                  print(f"Error: {error}")
-              sys.exit(1)
+            print("\n❌ DAG import errors:")
+            for f, e in dagbag.import_errors.items():
+              print(f"  {f}: {e}")
+            sys.exit(1)
 
-          dag_errors = []
+          errors = []
+
           for dag_id, dag in dagbag.dags.items():
-              try:
-                  dag.topological_sort()
-              except AirflowDagCycleException as error:
-                  dag_errors.append(f"DAG '{dag_id}' has a cycle: {error}")
+            try:
+              dag.topological_sort()
+            except AirflowDagCycleException as e:
+              errors.append(f"DAG '{dag_id}' has a cycle: {e}")
 
           if errors:
             print("\n❌ DAG validation errors:")
@@ -88,11 +82,10 @@ jobs:
               print(f"  {e}")
             sys.exit(1)
 
-          # Success
-          print(f"\n✅ Successfully validated {len(dagbag.dags)} DAG(s):")
+          print(f"\n✅ Validated {len(dagbag.dags)} DAG(s):")
           for dag_id in dagbag.dags.keys():
-              print(f"  - {dag_id}")
-          EOF
+            print(f"  - {dag_id}")
+EOF
 
       - name: Run unit tests with coverage
         if: hashFiles('tests/**') != '' || hashFiles('pytest.ini') != ''
