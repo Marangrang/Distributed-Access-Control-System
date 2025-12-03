@@ -39,6 +39,7 @@ def test_bucket_exists(minio_client):
         pytest.fail(f"Bucket operation failed: {e}")
 
 
+@pytest.mark.integration
 def test_upload_download_file(minio_client):
     """Test file upload and download."""
     bucket_name = "test-bucket"
