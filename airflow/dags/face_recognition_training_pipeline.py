@@ -14,7 +14,7 @@ Tags: ml, face-recognition, training, production
 """
 from datetime import datetime, timedelta
 import logging
-from typing import Dict
+from typing import Dict, Any
 from airflow import DAG
 from airflow.operators.python import PythonOperator
 from airflow.providers.common.sql.operators.sql import SQLExecuteQueryOperator
