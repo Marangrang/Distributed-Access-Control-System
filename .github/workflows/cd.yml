@@ -204,18 +204,22 @@ jobs:
           Write-Host "Collecting logs..."
           New-Item -ItemType Directory -Force -Path logs | Out-Null
 
-          $services = docker compose ps --services 2>&1
-          if ($LASTEXITCODE -ne 0) {
-            Write-Host "[WARNING] Could not list services"
-            exit 0
+          try {
+            $services = docker compose ps --services 2>&1
+            if ($LASTEXITCODE -eq 0) {
+              foreach ($service in $services) {
+                Write-Host "Collecting logs for $service..."
+                docker compose logs --tail=200 $service > "logs/${service}.log" 2>&1
+              }
+            } else {
+              Write-Host "[WARNING] Could not list services, collecting generic logs..."
+              docker compose logs --tail=200 > "logs/all-services.log" 2>&1
+            }
+          } catch {
+            Write-Host "[WARNING] Error collecting logs: $_"
           }
 
-          foreach ($service in $services) {
-            Write-Host "Collecting logs for $service..."
-            docker compose logs --tail=200 $service > "logs/${service}.log" 2>&1
-          }
-
-          Write-Host "[OK] Logs collected"
+          Write-Host "[OK] Log collection completed"
 
       - name: Upload deployment logs
         if: always()
@@ -224,7 +228,7 @@ jobs:
           name: deployment-logs-${{ github.run_id }}
           path: logs/
           retention-days: 7
-          if-no-files-found: warn
+          if-no-files-found: ignore
 
       - name: Display service status
         if: always()
