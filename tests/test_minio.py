@@ -7,8 +7,12 @@ import io
 
 
 @pytest.fixture
-def minio_client():
+def minio_client(request):
     """Create MinIO client for testing."""
+    # Skip if not running integration tests
+    if "integration" not in request.config.option.markexpr:
+        pytest.skip("MinIO tests require --run-integration flag or -m integration")
+
     client = Minio(
         os.getenv("MINIO_ENDPOINT", "localhost:9000"),
         access_key=os.getenv("MINIO_ACCESS_KEY", "minioadmin"),

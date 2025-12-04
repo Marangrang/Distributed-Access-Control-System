@@ -60,7 +60,7 @@ jobs:
           print('Loading DAGs from airflow/dags...')
           dagbag = DagBag(dag_folder='airflow/dags', include_examples=False)
           if dagbag.import_errors:
-              print('\n❌ DAG import errors:')
+              print('\n[ERROR] DAG import errors:')
               for f, e in dagbag.import_errors.items():
                   print(f'  {f}: {e}')
               sys.exit(1)
@@ -71,11 +71,11 @@ jobs:
               except AirflowDagCycleException as e:
                   errors.append(f'DAG {dag_id} has a cycle: {e}')
           if errors:
-              print('\n❌ DAG validation errors:')
+              print('\n[ERROR] DAG validation errors:')
               for e in errors:
                   print(f'  {e}')
               sys.exit(1)
-          print(f'\n✅ Validated {len(dagbag.dags)} DAG(s):')
+          print(f'\n[SUCCESS] Validated {len(dagbag.dags)} DAG(s):')
           for dag_id in dagbag.dags.keys():
               print(f'  - {dag_id}')
           "
