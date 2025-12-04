@@ -58,6 +58,14 @@ jobs:
           docker compose down --remove-orphans --volumes 2>&1 | Out-Null
           Start-Sleep -Seconds 5
 
+      - name: Restart Docker BuildKit
+        shell: powershell
+        run: |
+          Write-Host "Restarting BuildKit..."
+          docker buildx rm --all-inactive --force 2>$null
+          docker buildx prune -af 2>$null
+          Write-Host "[OK] BuildKit reset"
+
       - name: Build Docker images
         shell: powershell
         env:
