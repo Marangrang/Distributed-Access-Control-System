@@ -10,12 +10,12 @@ permissions:
 
 concurrency:
   group: cd-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   build-and-deploy:
     runs-on: self-hosted
-    timeout-minutes: 160
+    timeout-minutes: 240
 
     steps:
       - name: Checkout code
@@ -33,6 +33,13 @@ jobs:
             Start-Sleep -Seconds 5
           }
           if ($LASTEXITCODE -ne 0) { Write-Error "Docker not ready"; exit 1 }
+
+      - name: Show Docker versions
+        shell: powershell
+        run: |
+          Write-Host "Docker info:"
+          docker version
+          docker compose version
 
       - name: Load environment variables
         shell: powershell
@@ -69,11 +76,12 @@ jobs:
       - name: Build Docker images
         shell: powershell
         env:
-          DOCKER_BUILDKIT: 1
-          COMPOSE_DOCKER_CLI_BUILD: 1
+          DOCKER_BUILDKIT: 0
+          COMPOSE_DOCKER_CLI_BUILD: 0
         run: |
           Write-Host "Building Docker images..."
-          docker compose build --progress=plain
+          docker compose --progress=plain build
+          if ($LASTEXITCODE -ne 0) { Write-Error "Build failed"; exit 1 }
           Write-Host "[OK] Docker images built successfully"
 
       - name: Start services
@@ -253,3 +261,18 @@ jobs:
           Write-Host "  MinIO Console: http://localhost:9001"
           Write-Host "  Database: localhost:5432"
           Write-Host "========================================"
+
+      - name: Teardown services
+        if: always()
+        shell: powershell
+        continue-on-error: true
+        run: |
+          Write-Host "Stopping and removing services..."
+          docker compose down --remove-orphans --volumes
+          Write-Host "[OK] Teardown complete"
+
+      - name: Note job status if cancelled
+        if: cancelled()
+        shell: powershell
+        run: |
+          Write-Host "[INFO] Job was cancelled (likely superseded by a newer run or timeout)."
