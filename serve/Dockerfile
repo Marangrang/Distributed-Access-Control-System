@@ -48,13 +48,11 @@ COPY --from=builder /usr/local/bin /usr/local/bin
 COPY serve/ /app/
 COPY verification_service/ /app/verification_service/
 
-# Make entrypoint executable
-RUN test -f /app/entrypoint.sh && chmod +x /app/entrypoint.sh
-
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
     CMD curl -f http://localhost:8000/health || exit 1
 
-EXPOSE 8000
+RUN chmod +x /app/entrypoint.sh
 
-ENTRYPOINT ["/app/entrypoint.sh"]
+EXPOSE 8000
+CMD ["/app/entrypoint.sh"]

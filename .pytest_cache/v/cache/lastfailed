@@ -1,0 +1,14 @@
+{
+  "tests/airflow/test_dags.py::TestDAGIntegrity": true,
+  "tests/airflow/test_dags.py::TestTrainingPipelineDAG": true,
+  "tests/airflow/test_dags.py::TestIngestionPipelineDAG": true,
+  "tests/airflow/test_dags.py::TestDAGIntegrity::test_dag_loading": true,
+  "tests/airflow/test_dags.py::TestDAGIntegrity::test_required_dags_exist": true,
+  "tests/airflow/test_dags.py::TestIngestionPipelineDAG::test_dag_exists": true,
+  "tests/airflow/test_dags.py::TestIngestionPipelineDAG::test_dag_task_count": true,
+  "tests/airflow/test_dags.py::TestIngestionPipelineDAG::test_dag_has_required_tasks": true,
+  "tests/airflow/test_dags.py::TestIngestionPipelineDAG::test_dag_schedule": true,
+  "tests/airflow/test_dags.py": true,
+  "tests/test_integration.py": true,
+  "tests/test_minio.py": true
+}
