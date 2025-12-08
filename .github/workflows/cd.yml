@@ -62,10 +62,10 @@ jobs:
         shell: powershell
         run: |
           Write-Host "Stopping existing containers..."
-          docker compose down --remove-orphans --volumes -ErrorAction SilentlyContinue
-          # Force-remove any leftover named containers
+          docker compose down --remove-orphans --volumes 2>&1 | Out-Null
+          # Force-remove any leftover named containers (ignore errors)
           @("app", "db", "minio") | ForEach-Object {
-            docker rm -f $_ 2>&1 | Out-Null
+            docker rm -f $_ -ErrorAction SilentlyContinue 2>&1 | Out-Null
           }
           Write-Host "[OK] Cleanup complete"
 
