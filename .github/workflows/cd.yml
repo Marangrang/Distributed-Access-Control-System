@@ -65,7 +65,11 @@ jobs:
           docker compose down --remove-orphans --volumes 2>&1 | Out-Null
           # Force-remove any leftover named containers (ignore errors)
           @("app", "db", "minio") | ForEach-Object {
-            docker rm -f $_ -ErrorAction SilentlyContinue 2>&1 | Out-Null
+            try {
+              docker rm -f $_
+            } catch {
+              # Silently ignore if container doesn't exist
+            }
           }
           Write-Host "[OK] Cleanup complete"
 
@@ -232,14 +236,16 @@ jobs:
           New-Item -ItemType Directory -Force -Path logs | Out-Null
 
           try {
-            $services = docker compose ps --services 2>&1
-            if ($LASTEXITCODE -eq 0) {
+            $services = @(docker compose ps --services 2>&1 | Where-Object { $_ -match '\S' })
+            Write-Host "Found services: $($services -join ', ')"
+
+            if ($services.Count -gt 0) {
               foreach ($service in $services) {
                 Write-Host "Collecting logs for $service..."
                 docker compose logs --tail=200 $service > "logs/${service}.log" 2>&1
               }
             } else {
-              Write-Host "[WARNING] Could not list services, collecting generic logs..."
+              Write-Host "[WARNING] No services found, collecting generic logs..."
               docker compose logs --tail=200 > "logs/all-services.log" 2>&1
             }
           } catch {
@@ -247,6 +253,7 @@ jobs:
           }
 
           Write-Host "[OK] Log collection completed"
+          Get-ChildItem logs/ -ErrorAction SilentlyContinue
 
       - name: Upload deployment logs
         if: always()
