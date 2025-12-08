@@ -89,6 +89,12 @@ jobs:
         run: |
           Write-Host "Starting services..."
           docker compose up -d
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "[ERROR] Failed to start services"
+            docker compose ps
+            docker compose logs --tail=50
+            exit 1
+          }
           Write-Host "[OK] Services started"
 
       - name: Wait for services to be healthy
