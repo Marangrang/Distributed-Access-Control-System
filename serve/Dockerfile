@@ -40,13 +40,11 @@ RUN --mount=type=cache,target=/var/cache/apt \
     libgl1 postgresql-client curl netcat-openbsd \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy Python packages from builder
+# Copy Python packages from builder (ONCE)
 COPY --from=builder /usr/local/lib/python3.9/site-packages /usr/local/lib/python3.9/site-packages
 COPY --from=builder /usr/local/bin /usr/local/bin
 
 # Copy application code
-COPY --from=builder /usr/local/lib/python3.9/site-packages /usr/local/lib/python3.9/site-packages
-COPY --from=builder /usr/local/bin /usr/local/bin
 COPY serve/ /app/serve/
 COPY verification_service/ /app/verification_service/
 
