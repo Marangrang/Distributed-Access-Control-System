@@ -62,11 +62,11 @@ jobs:
         shell: powershell
         run: |
           Write-Host "Stopping existing containers..."
-          docker compose down --remove-orphans --volumes 2>&1 | Out-Null
+          docker compose down --remove-orphans --volumes
           # Force-remove any leftover named containers (ignore errors)
           @("app", "db", "minio") | ForEach-Object {
             try {
-              docker rm -f $_
+              docker rm -f $_ 2>&1 | Out-Null
             } catch {
               # Silently ignore if container doesn't exist
             }
@@ -236,17 +236,17 @@ jobs:
           New-Item -ItemType Directory -Force -Path logs | Out-Null
 
           try {
-            $services = @(docker compose ps --services 2>&1 | Where-Object { $_ -match '\S' })
-            Write-Host "Found services: $($services -join ', ')"
+            # Check all containers, not just compose services
+            $containers = @(docker ps -a --filter "name=app" --filter "name=db" --filter "name=minio" --format "{{.Names}}")
+            Write-Host "Found containers: $($containers -join ', ')"
 
-            if ($services.Count -gt 0) {
-              foreach ($service in $services) {
-                Write-Host "Collecting logs for $service..."
-                docker compose logs --tail=200 $service > "logs/${service}.log" 2>&1
+            if ($containers.Count -gt 0) {
+              foreach ($container in $containers) {
+                Write-Host "Collecting logs for $container..."
+                docker logs $container --tail=200 > "logs/${container}.log" 2>&1
               }
             } else {
-              Write-Host "[WARNING] No services found, collecting generic logs..."
-              docker compose logs --tail=200 > "logs/all-services.log" 2>&1
+              Write-Host "[WARNING] No containers found"
             }
           } catch {
             Write-Host "[WARNING] Error collecting logs: $_"
