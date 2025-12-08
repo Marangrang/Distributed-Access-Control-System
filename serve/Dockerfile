@@ -40,17 +40,17 @@ RUN --mount=type=cache,target=/var/cache/apt \
     libgl1 postgresql-client curl netcat-openbsd \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy Python packages from builder (ONCE)
+# Copy Python packages from builder
 COPY --from=builder /usr/local/lib/python3.9/site-packages /usr/local/lib/python3.9/site-packages
 COPY --from=builder /usr/local/bin /usr/local/bin
 
-# Copy application code
-COPY serve/ /app/serve/
-COPY verification_service/ /app/verification_service/
-
-# Copy entrypoint explicitly to /app root
+# Copy entrypoint FIRST (before serve/ to avoid overwrite)
 COPY serve/entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh
+
+# Copy application code (this will place entrypoint.sh at /app/serve/entrypoint.sh too, but we use /app/entrypoint.sh)
+COPY serve/ /app/serve/
+COPY verification_service/ /app/verification_service/
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
