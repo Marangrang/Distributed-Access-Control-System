@@ -177,11 +177,13 @@ jobs:
             exit 0
           }
 
-          Write-Host "Testing API health endpoint..."
+          $port = if ($env:PORT) { $env:PORT } else { 8000 }
+          $url = "http://localhost:$port/health"
+          Write-Host "Testing API health endpoint at $url..."
           $max=20; $ok=$false
           for ($i=1; $i -le $max; $i++) {
             try {
-              $resp = Invoke-WebRequest -Uri "http://localhost:8080/health" -UseBasicParsing -TimeoutSec 3
+              $resp = Invoke-WebRequest -Uri $url -UseBasicParsing -TimeoutSec 3
               if ($resp.StatusCode -eq 200) {
                 $ok=$true
                 Write-Host "[OK] API is healthy"
