@@ -76,12 +76,11 @@ jobs:
 
       - name: Build Docker images
         shell: powershell
-        env:
-          DOCKER_BUILDKIT: 0
-          COMPOSE_DOCKER_CLI_BUILD: 0
         run: |
           Write-Host "Building Docker images..."
-          docker compose --progress=plain build
+          $env:DOCKER_BUILDKIT=1
+          $env:COMPOSE_DOCKER_CLI_BUILD=1
+          docker compose build --progress=plain
           if ($LASTEXITCODE -ne 0) { Write-Error "Build failed"; exit 1 }
           Write-Host "[OK] Docker images built successfully"
 
