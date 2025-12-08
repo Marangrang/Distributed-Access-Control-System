@@ -62,16 +62,17 @@ jobs:
         shell: powershell
         run: |
           Write-Host "Stopping existing containers..."
-          docker compose down --remove-orphans --volumes
-          # Force-remove any leftover named containers (ignore errors)
+          docker compose down --remove-orphans --volumes 2>&1 | ForEach-Object { Write-Host $_ }
+
+          # Force-remove any leftover named containers (ignore all errors)
+          $ErrorActionPreference = 'SilentlyContinue'
           @("app", "db", "minio") | ForEach-Object {
-            try {
-              docker rm -f $_ 2>&1 | Out-Null
-            } catch {
-              # Silently ignore if container doesn't exist
-            }
+            docker rm -f $_ 2>&1 | Out-Null
           }
+          $ErrorActionPreference = 'Continue'
+
           Write-Host "[OK] Cleanup complete"
+          exit 0
 
       - name: Restart Docker BuildKit
         shell: powershell
@@ -236,8 +237,14 @@ jobs:
           New-Item -ItemType Directory -Force -Path logs | Out-Null
 
           try {
-            # Check all containers, not just compose services
-            $containers = @(docker ps -a --filter "name=app" --filter "name=db" --filter "name=minio" --format "{{.Names}}")
+            # Get only compose project containers
+            $containers = @(docker ps -a --filter "label=com.docker.compose.project=distributed-access-control-system" --format "{{.Names}}")
+
+            if ($containers.Count -eq 0) {
+              # Fallback: try by exact names
+              $containers = @(docker ps -a --format "{{.Names}}" | Where-Object { $_ -match '^(app|db|minio)$' })
+            }
+
             Write-Host "Found containers: $($containers -join ', ')"
 
             if ($containers.Count -gt 0) {
@@ -246,7 +253,7 @@ jobs:
                 docker logs $container --tail=200 > "logs/${container}.log" 2>&1
               }
             } else {
-              Write-Host "[WARNING] No containers found"
+              Write-Host "[WARNING] No containers found for log collection"
             }
           } catch {
             Write-Host "[WARNING] Error collecting logs: $_"
@@ -254,6 +261,7 @@ jobs:
 
           Write-Host "[OK] Log collection completed"
           Get-ChildItem logs/ -ErrorAction SilentlyContinue
+          exit 0
 
       - name: Upload deployment logs
         if: always()

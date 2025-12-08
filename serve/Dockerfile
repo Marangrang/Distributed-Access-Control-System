@@ -45,14 +45,18 @@ COPY --from=builder /usr/local/lib/python3.9/site-packages /usr/local/lib/python
 COPY --from=builder /usr/local/bin /usr/local/bin
 
 # Copy application code
-COPY serve/ /app/
+COPY --from=builder /usr/local/lib/python3.9/site-packages /usr/local/lib/python3.9/site-packages
+COPY --from=builder /usr/local/bin /usr/local/bin
+COPY serve/ /app/serve/
 COPY verification_service/ /app/verification_service/
+
+# Copy entrypoint explicitly to /app root
+COPY serve/entrypoint.sh /app/entrypoint.sh
+RUN chmod +x /app/entrypoint.sh
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
     CMD curl -f http://localhost:8000/health || exit 1
-
-RUN chmod +x /app/entrypoint.sh
 
 EXPOSE 8000
 CMD ["/app/entrypoint.sh"]
