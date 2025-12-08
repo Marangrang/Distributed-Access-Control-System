@@ -62,7 +62,7 @@ jobs:
         shell: powershell
         run: |
           Write-Host "Stopping existing containers..."
-          docker compose down --remove-orphans --volumes 2>&1 | ForEach-Object { Write-Host $_ }
+          docker compose down --remove-orphans --volumes
 
           # Force-remove any leftover named containers (ignore all errors)
           $ErrorActionPreference = 'SilentlyContinue'
