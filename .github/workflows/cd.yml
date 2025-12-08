@@ -62,8 +62,9 @@ jobs:
         shell: powershell
         run: |
           Write-Host "Stopping existing containers..."
-          docker compose down --remove-orphans --volumes 2>&1 | Out-Null
+          docker compose down --remove-orphans --volumes
           Start-Sleep -Seconds 5
+          Write-Host "[OK] Cleanup complete"
 
       - name: Restart Docker BuildKit
         shell: powershell
