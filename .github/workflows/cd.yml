@@ -272,16 +272,17 @@ jobs:
           Write-Host "========================================"
 
       - name: Teardown services
-        if: always()
+        if: failure()
         shell: powershell
         continue-on-error: true
         run: |
-          Write-Host "Stopping and removing services..."
+          Write-Host "Stopping and removing services (on failure)..."
           docker compose down --remove-orphans --volumes
           Write-Host "[OK] Teardown complete"
 
-      - name: Note job status if cancelled
-        if: cancelled()
+      - name: Services deployed successfully
+        if: success()
         shell: powershell
         run: |
-          Write-Host "[INFO] Job was cancelled (likely superseded by a newer run or timeout)."
+          Write-Host "[OK] Services deployed and running!"
+          docker compose ps
