@@ -62,9 +62,11 @@ jobs:
         shell: powershell
         run: |
           Write-Host "Stopping existing containers..."
-          docker compose down --remove-orphans --volumes
+          docker compose down --remove-orphans --volumes -ErrorAction SilentlyContinue
           # Force-remove any leftover named containers
-          docker rm -f app db minio 2>$null
+          @("app", "db", "minio") | ForEach-Object {
+            docker rm -f $_ 2>&1 | Out-Null
+          }
           Write-Host "[OK] Cleanup complete"
 
       - name: Restart Docker BuildKit
@@ -81,7 +83,7 @@ jobs:
           Write-Host "Building Docker images..."
           $env:DOCKER_BUILDKIT=1
           $env:COMPOSE_DOCKER_CLI_BUILD=1
-          docker compose build --progress=plain
+          docker compose build
           if ($LASTEXITCODE -ne 0) { Write-Error "Build failed"; exit 1 }
           Write-Host "[OK] Docker images built successfully"
 
