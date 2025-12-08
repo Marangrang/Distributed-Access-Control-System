@@ -63,7 +63,8 @@ jobs:
         run: |
           Write-Host "Stopping existing containers..."
           docker compose down --remove-orphans --volumes
-          Start-Sleep -Seconds 5
+          # Force-remove any leftover named containers
+          docker rm -f app db minio 2>$null
           Write-Host "[OK] Cleanup complete"
 
       - name: Restart Docker BuildKit
