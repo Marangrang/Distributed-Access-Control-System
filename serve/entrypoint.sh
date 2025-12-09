@@ -5,7 +5,7 @@ echo "Starting Face Verification Service..."
 
 # Load env file if present (so container gets any values from serve/.env)
 set -a
-[ -f /app/serve/.env ] && . /app/serve/.env
+[ -f /app/serve/.env ] && . /app/serve/.env || true
 set +a
 
 
@@ -17,20 +17,20 @@ LOG_LEVEL=${LOG_LEVEL:-info}
 FAISS_INDEX_PATH=${FAISS_INDEX_PATH:-/app/verification_service/faiss_index}
 IMAGES_DIR=${IMAGES_DIR:-/app/verification_service/faiss_index/thumbs}
 
-# Wait for database to be ready (if using PostgreSQL)
-if [ -n "$DB_HOST" ] && [ -n "$DB_PORT" ]; then
-    echo "Waiting for database at $DB_HOST:$DB_PORT..."
-    while ! nc -z "$DB_HOST" "$DB_PORT"; do
-        sleep 1
-    done
-    echo "Database is ready!"
-fi
 
-# Wait for MinIO to be ready (if using MinIO)
-if [ -n "$MINIO_ENDPOINT" ]; then
-    echo "Waiting for MinIO at $MINIO_ENDPOINT..."
-    # Add MinIO health check logic here if needed
-fi
+# Wait for database to be ready
+echo "Waiting for PostgreSQL at $DB_HOST:$DB_PORT..."
+while ! pg_isready -h "${DB_HOST:-db}" -p "${DB_PORT:-5432}" -U "${DB_USER:-appuser}"; do
+  sleep 2
+done
+echo "PostgreSQL is ready!"
+
+# Wait for MinIO to be ready
+echo "Waiting for MinIO at ${MINIO_ENDPOINT:-http://minio:9000}..."
+while ! curl -sf "${MINIO_ENDPOINT:-http://minio:9000}/minio/health/live" > /dev/null 2>&1; do
+  sleep 2
+done
+echo "MinIO is ready!"
 
 # Initialize FAISS index if it doesn't exist
 if [[ ! -f "$FAISS_INDEX_PATH/driver_vectors.index" || ! -f "$FAISS_INDEX_PATH/metadata.json" ]]; then
@@ -73,9 +73,5 @@ else
 fi
 
 # Start the application
-echo "Starting Uvicorn server..."
-exec uvicorn verification_service.main:app \
-    --host "$UVICORN_HOST" \
-    --port "$UVICORN_PORT" \
-    --workers "$UVICORN_WORKERS" \
-    --log-level "$LOG_LEVEL"
+echo "Starting Uvicorn server on $UVICORN_HOST:$UVICORN_PORT..."
+exec uvicorn serve.main:app --host "$UVICORN_HOST" --port "$UVICORN_PORT"
