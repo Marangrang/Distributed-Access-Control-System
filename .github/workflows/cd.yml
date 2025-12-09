@@ -96,10 +96,14 @@ jobs:
         shell: powershell
         run: |
           Write-Host "Docker images:"
-          docker images | grep distributed-access-control-system
+          docker images | Select-String "distributed-access-control-system"
 
-          Write-Host "`nDocker compose config:"
-          docker compose config | head -50
+          Write-Host "`nDocker compose config (first 50 lines):"
+          $config = docker compose config
+          $config | Select-Object -First 50
+
+          Write-Host "`nDocker compose ps:"
+          docker compose ps
 
       - name: Start services
         shell: powershell
