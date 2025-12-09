@@ -3,31 +3,35 @@ set -e
 
 echo "Starting Face Verification Service..."
 
-# Load env file if present (so container gets any values from serve/.env)
+# Load env file if present
 set -a
-[ -f /app/serve/.env ] && . /app/serve/.env || true
+if [ -f /app/serve/.env ]; then
+  . /app/serve/.env
+else
+  echo "[INFO] /app/serve/.env not found, continuing with defaults"
+fi
 set +a
-
 
 # Defaults to prevent uvicorn arg errors
 UVICORN_HOST=${UVICORN_HOST:-0.0.0.0}
 UVICORN_PORT=${UVICORN_PORT:-8000}
-UVICORN_WORKERS=${UVICORN_WORKERS:-1}
 LOG_LEVEL=${LOG_LEVEL:-info}
 FAISS_INDEX_PATH=${FAISS_INDEX_PATH:-/app/verification_service/faiss_index}
 IMAGES_DIR=${IMAGES_DIR:-/app/verification_service/faiss_index/thumbs}
 
 
-# Wait for database to be ready
-echo "Waiting for PostgreSQL at $DB_HOST:$DB_PORT..."
-while ! pg_isready -h "${DB_HOST:-db}" -p "${DB_PORT:-5432}" -U "${DB_USER:-appuser}"; do
+mkdir -p "$FAISS_INDEX_PATH" "$IMAGES_DIR"
+
+# Wait for database
+echo "Waiting for PostgreSQL at ${DB_HOST:-db}:${DB_PORT:-5432}..."
+while ! pg_isready -h "${DB_HOST:-db}" -p "${DB_PORT:-5432}" -U "${DB_USER:-appuser}" >/dev/null 2>&1; do
   sleep 2
 done
 echo "PostgreSQL is ready!"
 
-# Wait for MinIO to be ready
+# Wait for MinIO
 echo "Waiting for MinIO at ${MINIO_ENDPOINT:-http://minio:9000}..."
-while ! curl -sf "${MINIO_ENDPOINT:-http://minio:9000}/minio/health/live" > /dev/null 2>&1; do
+while ! curl -sf "${MINIO_ENDPOINT:-http://minio:9000}/minio/health/live" >/dev/null 2>&1; do
   sleep 2
 done
 echo "MinIO is ready!"
@@ -73,5 +77,5 @@ else
 fi
 
 # Start the application
-echo "Starting Uvicorn server on $UVICORN_HOST:$UVICORN_PORT..."
-exec uvicorn serve.main:app --host "$UVICORN_HOST" --port "$UVICORN_PORT"
+echo "Starting Uvicorn server on $UVICORN_HOST:$UVICORN_PORT (single worker)..."
+exec uvicorn serve.main:app --host "$UVICORN_HOST" --port "$UVICORN_PORT" --log-level "$LOG_LEVEL"
