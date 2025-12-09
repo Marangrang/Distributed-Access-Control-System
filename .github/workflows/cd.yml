@@ -1,341 +1,446 @@
-name: CD - Build and Deploy Locally
+name: CD - Build and Deploy
 
 on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      environment:
+        description: "Deployment environment"
+        required: false
+        default: "staging"
+        type: choice
+        options:
+          - staging
+          - production
 
 permissions:
   contents: read
+  packages: write
 
 concurrency:
-  group: cd-${{ github.ref }}
+  group: cd-${{ github.ref }}-${{ github.workflow }}
   cancel-in-progress: false
+
+env:
+  REGISTRY: docker.io
+  IMAGE_NAME: distributed-access-control-system-app
+  COMPOSE_PROJECT_NAME: dacs
+  LOG_RETENTION_DAYS: 7
 
 jobs:
   build-and-deploy:
     runs-on: self-hosted
-    timeout-minutes: 240
+    timeout-minutes: 60
+
+    outputs:
+      image-digest: ${{ steps.build.outputs.digest }}
+      build-time: ${{ steps.build.outputs.build-time }}
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
 
-      - name: Verify Docker is ready
+      - name: Validate environment
+        id: validate
         shell: powershell
         run: |
-          $tries=0
-          while ($tries -lt 10) {
-            docker ps 2>$null
-            if ($LASTEXITCODE -eq 0) { Write-Host "[OK] Docker ready"; break }
-            $tries++
-            Write-Host "Waiting for Docker ($tries/10)..."
-            Start-Sleep -Seconds 5
-          }
-          if ($LASTEXITCODE -ne 0) { Write-Error "Docker not ready"; exit 1 }
+          Write-Host "════════════════════════════════════════" -ForegroundColor Cyan
+          Write-Host "VALIDATING ENVIRONMENT" -ForegroundColor Cyan
+          Write-Host "════════════════════════════════════════" -ForegroundColor Cyan
 
-      - name: Show Docker versions
-        shell: powershell
-        run: |
-          Write-Host "Docker info:"
-          docker version
-          docker compose version
+          $requiredFiles = @(
+            "docker-compose.yml",
+            "serve/Dockerfile",
+            "serve/entrypoint.sh",
+            "serve/main.py"
+          )
 
-      - name: Load environment variables
-        shell: powershell
-        run: |
-          if (Test-Path .env) {
-            Get-Content .env | ForEach-Object {
-              if ($_ -match '^([^#].+?)=(.+)$') {
-                $name = $matches[1].Trim()
-                $value = $matches[2].Trim()
-                Write-Host "Setting $name"
-                [Environment]::SetEnvironmentVariable($name, $value, "Process")
-              }
+          $missingFiles = @()
+          foreach ($file in $requiredFiles) {
+            if (Test-Path $file) {
+              Write-Host "✓ $file" -ForegroundColor Green
+            } else {
+              Write-Host "✗ $file MISSING" -ForegroundColor Red
+              $missingFiles += $file
             }
           }
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Stop and remove existing containers
-        shell: powershell
-        run: |
-          Write-Host "Stopping existing containers..."
-          docker compose down --remove-orphans --volumes
-
-          # Force-remove any leftover named containers (ignore all errors)
-          $ErrorActionPreference = 'SilentlyContinue'
-          @("app", "db", "minio") | ForEach-Object {
-            docker rm -f $_ 2>&1 | Out-Null
-          }
-          $ErrorActionPreference = 'Continue'
-
-          Write-Host "[OK] Cleanup complete"
-          exit 0
-
-      - name: Restart Docker BuildKit
-        shell: powershell
-        run: |
-          Write-Host "Restarting BuildKit..."
-          docker buildx rm --all-inactive --force 2>$null
-          docker buildx prune -af 2>$null
-          Write-Host "[OK] BuildKit reset"
-
-      - name: Build Docker images
-        shell: powershell
-        run: |
-          Write-Host "Building Docker images..."
-          $env:DOCKER_BUILDKIT=1
-          $env:COMPOSE_DOCKER_CLI_BUILD=1
-          docker compose build
-          if ($LASTEXITCODE -ne 0) { Write-Error "Build failed"; exit 1 }
-          Write-Host "[OK] Docker images built successfully"
-
-      - name: Check Docker images
-        shell: powershell
-        run: |
-          Write-Host "Docker images:"
-          docker images | Select-String "distributed-access-control-system"
-
-          Write-Host "`nVerifying docker-compose.yml exists..."
-          if (Test-Path "docker-compose.yml") {
-            Write-Host "[OK] docker-compose.yml found"
-          } else {
-            Write-Error "docker-compose.yml not found!"
+          if ($missingFiles.Count -gt 0) {
+            Write-Error "Missing critical files: $($missingFiles -join ', ')"
             exit 1
           }
 
-      - name: Starting services...
+          Write-Host "`nDirectory structure valid" -ForegroundColor Green
+          echo "valid=true" >> $env:GITHUB_OUTPUT
+
+      - name: Setup Docker environment
         shell: powershell
         run: |
-          Write-Host "Starting services..."
-          docker compose down --remove-orphans -v 2>&1 | Out-Null
-          docker compose up -d
-          Write-Host "[OK] Services started"
+          Write-Host "`n════════════════════════════════════════" -ForegroundColor Cyan
+          Write-Host "SETTING UP DOCKER" -ForegroundColor Cyan
+          Write-Host "════════════════════════════════════════" -ForegroundColor Cyan
 
-      - name: Stream logs while waiting
-        shell: powershell
-        timeout-minutes: 10
-        continue-on-error: true
-        run: |
-          Write-Host "Starting services..."
-          docker compose up -d
+          # Verify Docker daemon
+          $maxRetries = 10
+          $retryCount = 0
 
-          Write-Host "`nStreaming logs...`n"
-
-          $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
-          $maxSeconds = 600
-
-          while ($stopwatch.Elapsed.TotalSeconds -lt $maxSeconds) {
+          while ($retryCount -lt $maxRetries) {
             try {
-              $ps = docker compose ps --format json | ConvertFrom-Json -ErrorAction SilentlyContinue
-              $appHealthy = $ps | Where-Object { $_.Service -eq "app" -and $_.State -match "healthy" }
-
-              if ($appHealthy) {
-                Write-Host "`n[OK] App is healthy!" -ForegroundColor Green
-                break
-              }
-
-              Write-Host "Waiting for app... ($([math]::Floor($stopwatch.Elapsed.TotalSeconds))s)"
-              Start-Sleep -Seconds 10
+              $info = docker info --format '{{.OperatingSystem}}'
+              Write-Host "✓ Docker daemon ready" -ForegroundColor Green
+              Write-Host "  OS: $info"
+              break
             } catch {
-              Start-Sleep -Seconds 5
-            }
-          }
-
-          Write-Host "`nFinal status:"
-          docker compose ps
-
-      - name: Smoke Test - Database
-        shell: powershell
-        run: |
-          Write-Host "Testing database connectivity..."
-          $dbUser = if ($env:DB_USER) { $env:DB_USER } else { "appuser" }
-          $dbName = if ($env:DB_NAME) { $env:DB_NAME } else { "appdb" }
-
-          docker compose exec -T db pg_isready -U $dbUser -d $dbName
-          if ($LASTEXITCODE -eq 0) {
-            Write-Host "[OK] Database is ready"
-          } else {
-            Write-Host "[ERROR] Database check failed"
-            docker compose logs db --tail=30
-            exit 1
-          }
-
-      - name: Smoke Test - MinIO
-        shell: powershell
-        run: |
-          Write-Host "Testing MinIO connectivity..."
-          try {
-            $minio = Invoke-WebRequest -Uri "http://localhost:9000/minio/health/live" -TimeoutSec 5
-            if ($minio.StatusCode -eq 200) {
-              Write-Host "[OK] MinIO is healthy"
-            }
-          } catch {
-            Write-Host "[ERROR] MinIO health check failed: $_"
-            docker compose logs minio --tail=30
-            exit 1
-          }
-
-      - name: Smoke Test - API (if exists)
-        shell: powershell
-        continue-on-error: true
-        run: |
-          $services = docker compose ps --services
-          if (-not ($services -contains 'app')) {
-            Write-Host "[INFO] No 'app' service found. Skipping API smoke tests."
-            exit 0
-          }
-
-          $port = if ($env:PORT) { $env:PORT } else { 8000 }
-          $url = "http://localhost:$port/health"
-          Write-Host "Testing API health endpoint at $url..."
-          $max=20; $ok=$false
-          for ($i=1; $i -le $max; $i++) {
-            try {
-              $resp = Invoke-WebRequest -Uri $url -UseBasicParsing -TimeoutSec 3
-              if ($resp.StatusCode -eq 200) {
-                $ok=$true
-                Write-Host "[OK] API is healthy"
-                break
+              $retryCount++
+              if ($retryCount -ge $maxRetries) {
+                throw "Docker daemon not responding after $maxRetries attempts"
               }
-            } catch {
-              Write-Host "Health check failed, retrying ($i/$max)..."
+              Write-Host "Docker daemon not ready ($retryCount/$maxRetries), retrying..."
               Start-Sleep -Seconds 3
             }
           }
-          if (-not $ok) {
-            Write-Host "[WARNING] API health endpoint not ready"
-          }
 
-      - name: Download MinIO Client
+          # Set build kit
+          $env:DOCKER_BUILDKIT = 1
+          $env:COMPOSE_DOCKER_CLI_BUILD = 1
+          Write-Host "✓ Docker BuildKit enabled" -ForegroundColor Green
+
+      - name: Verify Docker versions
         shell: powershell
         run: |
-          if (-not (Test-Path "mc.exe")) {
-            Write-Host "Downloading MinIO Client..."
-            Invoke-WebRequest -Uri "https://dl.min.io/client/mc/release/windows-amd64/mc.exe" -OutFile "mc.exe"
-            Write-Host "[OK] MinIO Client downloaded"
+          Write-Host "`nVerifying versions..."
+
+          $docker_version = docker --version
+          $compose_version = docker compose version --short
+
+          Write-Host "  Docker: $docker_version"
+          Write-Host "  Compose: $compose_version"
+
+          if (-not $compose_version) {
+            throw "Docker Compose not available"
           }
 
-      - name: Configure MinIO and create bucket
+      - name: Clean old resources
+        id: cleanup
         shell: powershell
         continue-on-error: true
         run: |
-          Write-Host "Configuring MinIO..."
-          $accessKey = if ($env:MINIO_ACCESS_KEY) { $env:MINIO_ACCESS_KEY } else { "minioadmin" }
-          $secretKey = if ($env:MINIO_SECRET_KEY) { $env:MINIO_SECRET_KEY } else { "minioadmin" }
+          Write-Host "`n════════════════════════════════════════" -ForegroundColor Cyan
+          Write-Host "CLEANING OLD RESOURCES" -ForegroundColor Cyan
+          Write-Host "════════════════════════════════════════" -ForegroundColor Cyan
 
-          .\mc.exe alias set myminio http://localhost:9000 $accessKey $secretKey
-          .\mc.exe mb --ignore-existing myminio/cd-logs
-          .\mc.exe ls myminio
-          Write-Host "[OK] MinIO bucket ready"
+          try {
+            # Stop and remove containers
+            Write-Host "Stopping containers..."
+            docker compose down --remove-orphans --volumes 2>&1 | Out-Null
 
-      - name: Collect logs
+            # Remove dangling images
+            Write-Host "Removing dangling images..."
+            docker image prune -f --filter "dangling=true" 2>&1 | Out-Null
+
+            Write-Host "✓ Cleanup complete" -ForegroundColor Green
+          } catch {
+            Write-Host "⚠ Cleanup warning: $($_.Exception.Message)" -ForegroundColor Yellow
+          }
+
+      - name: Build Docker images
+        id: build
+        shell: powershell
+        timeout-minutes: 30
+        run: |
+          Write-Host "`n════════════════════════════════════════" -ForegroundColor Cyan
+          Write-Host "BUILDING DOCKER IMAGES" -ForegroundColor Cyan
+          Write-Host "════════════════════════════════════════" -ForegroundColor Cyan
+
+          $buildStart = Get-Date
+
+          try {
+            Write-Host "Building images with BuildKit..."
+            $output = docker compose build --no-cache 2>&1
+
+            if ($LASTEXITCODE -ne 0) {
+              Write-Host $output
+              throw "Docker build failed with exit code $LASTEXITCODE"
+            }
+
+            Write-Host "✓ Build successful" -ForegroundColor Green
+
+            # Get image digest
+            $digest = docker compose images -q 2>&1 | Select-Object -First 1
+
+            $buildTime = (Get-Date) - $buildStart
+
+            echo "digest=$digest" >> $env:GITHUB_OUTPUT
+            echo "build-time=$($buildTime.TotalSeconds)" >> $env:GITHUB_OUTPUT
+
+            Write-Host "  Digest: $digest"
+            Write-Host "  Build time: $($buildTime.TotalSeconds)s"
+
+          } catch {
+            Write-Error "Build failed: $_"
+            exit 1
+          }
+
+      - name: Validate built images
+        shell: powershell
+        run: |
+          Write-Host "`nValidating images..."
+
+          $images = docker images --format json | ConvertFrom-Json
+          $appImage = $images | Where-Object { $_.Repository -match "distributed-access-control-system" }
+
+          if ($null -eq $appImage) {
+            throw "App image not found in Docker"
+          }
+
+          Write-Host "✓ Image found: $($appImage.Repository):$($appImage.Tag)" -ForegroundColor Green
+          Write-Host "  Size: $($appImage.Size)"
+
+      - name: Start services
+        id: startup
+        shell: powershell
+        timeout-minutes: 5
+        run: |
+          Write-Host "`n════════════════════════════════════════" -ForegroundColor Cyan
+          Write-Host "STARTING SERVICES" -ForegroundColor Cyan
+          Write-Host "════════════════════════════════════════" -ForegroundColor Cyan
+
+          try {
+            Write-Host "Starting docker compose services..."
+            docker compose up -d
+
+            if ($LASTEXITCODE -ne 0) {
+              throw "Failed to start services"
+            }
+
+            Write-Host "✓ Services started" -ForegroundColor Green
+            Start-Sleep -Seconds 10
+
+          } catch {
+            Write-Error "Startup failed: $_"
+            docker compose ps
+            exit 1
+          }
+
+      - name: Wait for health checks
+        id: health
+        shell: powershell
+        timeout-minutes: 10
+        run: |
+          Write-Host "`n════════════════════════════════════════" -ForegroundColor Cyan
+          Write-Host "WAITING FOR HEALTH CHECKS" -ForegroundColor Cyan
+          Write-Host "════════════════════════════════════════" -ForegroundColor Cyan
+
+          $maxAttempts = 120
+          $attempt = 0
+          $allHealthy = $false
+
+          while ($attempt -lt $maxAttempts) {
+            $attempt++
+
+            try {
+              # Parse container status
+              $psOutput = docker compose ps --format json
+
+              if ([string]::IsNullOrEmpty($psOutput)) {
+                Write-Host "[$attempt/$maxAttempts] Waiting for containers..."
+                Start-Sleep -Seconds 5
+                continue
+              }
+
+              $containers = $psOutput | ConvertFrom-Json -ErrorAction SilentlyContinue
+
+              if ($null -eq $containers) {
+                Write-Host "[$attempt/$maxAttempts] Invalid container data, retrying..."
+                Start-Sleep -Seconds 5
+                continue
+              }
+
+              # Ensure it's an array
+              if ($containers -isnot [array]) {
+                $containers = @($containers)
+              }
+
+              # Check each service
+              $statuses = @()
+              foreach ($container in $containers) {
+                $statuses += "$($container.Service):$($container.State)"
+              }
+              Write-Host "[$attempt/$maxAttempts] $($statuses -join ' | ')"
+
+              # Validate health
+              $app = $containers | Where-Object { $_.Service -eq "app" }
+              $db = $containers | Where-Object { $_.Service -eq "db" }
+              $minio = $containers | Where-Object { $_.Service -eq "minio" }
+
+              if ($null -eq $app -or $null -eq $db -or $null -eq $minio) {
+                Write-Host "[$attempt/$maxAttempts] Not all services started yet..."
+                Start-Sleep -Seconds 5
+                continue
+              }
+
+              # Check states
+              $appOk = $app.State -match "healthy|running"
+              $dbOk = $db.State -match "healthy"
+              $minioOk = $minio.State -match "healthy|running"
+
+              if ($appOk -and $dbOk -and $minioOk) {
+                Write-Host "`n✓ All services healthy" -ForegroundColor Green
+                $allHealthy = $true
+                echo "status=healthy" >> $env:GITHUB_OUTPUT
+                break
+              }
+
+            } catch {
+              Write-Host "[$attempt/$maxAttempts] Health check error: $($_.Exception.Message)"
+            }
+
+            Start-Sleep -Seconds 5
+          }
+
+          if (-not $allHealthy) {
+            Write-Host "✗ Services failed to become healthy" -ForegroundColor Red
+            docker compose ps
+            echo "status=unhealthy" >> $env:GITHUB_OUTPUT
+            exit 1
+          }
+
+      - name: Smoke tests
+        id: tests
+        shell: powershell
+        continue-on-error: true
+        run: |
+          Write-Host "`n════════════════════════════════════════" -ForegroundColor Cyan
+          Write-Host "RUNNING SMOKE TESTS" -ForegroundColor Cyan
+          Write-Host "════════════════════════════════════════" -ForegroundColor Cyan
+
+          $testsPassed = 0
+          $testsFailed = 0
+
+          # Test 1: API Health
+          Write-Host "`n[TEST 1] API Health endpoint..."
+          try {
+            $resp = Invoke-WebRequest -Uri "http://localhost:8000/health" `
+              -UseBasicParsing -TimeoutSec 5 -ErrorAction Stop
+
+            if ($resp.StatusCode -eq 200) {
+              Write-Host "✓ API healthy (200)" -ForegroundColor Green
+              $testsPassed++
+            } else {
+              throw "Unexpected status code: $($resp.StatusCode)"
+            }
+          } catch {
+            Write-Host "✗ API health test failed: $_" -ForegroundColor Red
+            $testsFailed++
+          }
+
+          # Test 2: Database connectivity
+          Write-Host "`n[TEST 2] Database connectivity..."
+          try {
+            $dbCheck = docker compose exec -T db `
+              pg_isready -U NWUUSER -d face_verification_db 2>&1
+
+            if ($LASTEXITCODE -eq 0) {
+              Write-Host "✓ Database ready" -ForegroundColor Green
+              $testsPassed++
+            } else {
+              throw "Database not ready"
+            }
+          } catch {
+            Write-Host "⚠ Database test skipped/failed: $_" -ForegroundColor Yellow
+          }
+
+          # Test 3: MinIO connectivity
+          Write-Host "`n[TEST 3] MinIO connectivity..."
+          try {
+            $minioCheck = Invoke-WebRequest -Uri "http://localhost:9000/minio/health/live" `
+              -UseBasicParsing -TimeoutSec 5 -ErrorAction Stop
+
+            if ($minioCheck.StatusCode -eq 200) {
+              Write-Host "✓ MinIO healthy" -ForegroundColor Green
+              $testsPassed++
+            }
+          } catch {
+            Write-Host "⚠ MinIO test skipped: $_" -ForegroundColor Yellow
+          }
+
+          Write-Host "`n$testsPassed passed, $testsFailed failed"
+          echo "passed=$testsPassed" >> $env:GITHUB_OUTPUT
+          echo "failed=$testsFailed" >> $env:GITHUB_OUTPUT
+
+      - name: Collect diagnostic logs
+        id: logs
         if: always()
         shell: powershell
-        continue-on-error: true
         run: |
-          Write-Host "Collecting logs..."
+          Write-Host "`n════════════════════════════════════════" -ForegroundColor Cyan
+          Write-Host "COLLECTING LOGS" -ForegroundColor Cyan
+          Write-Host "════════════════════════════════════════" -ForegroundColor Cyan
+
           New-Item -ItemType Directory -Force -Path logs | Out-Null
 
-          $containers = @("app", "db", "minio")
+          @("app", "db", "minio") | ForEach-Object {
+            $service = $_
+            Write-Host "Collecting logs for $service..."
 
-          foreach ($container in $containers) {
-            Write-Host "Collecting logs for $container..."
             try {
-              $logs = docker logs $container --tail=200 2>&1
-              $logs | Out-File -FilePath "logs/$($container).log" -Encoding UTF8 -Force
-              Write-Host "Successfully collected logs for $container"
+              docker logs $service --tail=300 --timestamps 2>&1 | `
+                Out-File -FilePath "logs/$service.log" -Encoding UTF8 -Force
+              Write-Host "✓ Saved logs/$service.log" -ForegroundColor Green
             } catch {
-              Write-Host "[WARNING] Failed to collect logs for $container`: $($_.Exception.Message)"
+              Write-Host "⚠ Failed to collect logs for $service" -ForegroundColor Yellow
             }
           }
 
-          Write-Host "`nFiles collected:"
-          Get-ChildItem logs/ -ErrorAction SilentlyContinue | Format-Table
+          # Also save docker compose config
+          docker compose ps --format json 2>&1 | `
+            Out-File -FilePath "logs/docker-compose-status.json" -Encoding UTF8 -Force
 
-          exit 0
+          Write-Host "`nLog files:"
+          Get-ChildItem logs/ -Recurse | Format-Table Name, Length
 
-      - name: Upload deployment logs
+      - name: Upload artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: deployment-logs-${{ github.run_id }}
+          name: deployment-logs-${{ github.run_id }}-${{ github.run_number }}
           path: logs/
-          retention-days: 7
-          if-no-files-found: ignore
+          retention-days: ${{ env.LOG_RETENTION_DAYS }}
+          if-no-files-found: warn
 
-      - name: Display service status
+      - name: Generate summary
         if: always()
         shell: powershell
         run: |
-          Write-Host ""
-          Write-Host "========================================"
-          Write-Host "Service Status:"
-          Write-Host "========================================"
-          docker compose ps
-          Write-Host ""
-          Write-Host "========================================"
-          Write-Host "Access URLs:"
-          Write-Host "  MinIO Console: http://localhost:9001"
-          Write-Host "  Database: localhost:5432"
-          Write-Host "========================================"
+          Write-Host "`n════════════════════════════════════════" -ForegroundColor Cyan
+          Write-Host "DEPLOYMENT SUMMARY" -ForegroundColor Cyan
+          Write-Host "════════════════════════════════════════" -ForegroundColor Cyan
 
-      - name: Teardown services
+          Write-Host "`nBuild Information:"
+          Write-Host "  Image Digest: ${{ steps.build.outputs.digest }}"
+          Write-Host "  Build Time: ${{ steps.build.outputs.build-time }}s"
+
+          Write-Host "`nHealth Status:"
+          Write-Host "  Status: ${{ steps.health.outputs.status }}"
+
+          Write-Host "`nTest Results:"
+          Write-Host "  Passed: ${{ steps.tests.outputs.passed }}"
+          Write-Host "  Failed: ${{ steps.tests.outputs.failed }}"
+
+          Write-Host "`nFinal Services Status:"
+          docker compose ps
+
+          Write-Host "`nDeployment: ${{ job.status }}" -ForegroundColor Green
+
+      - name: Cleanup on failure
         if: failure()
         shell: powershell
         continue-on-error: true
         run: |
-          Write-Host "Stopping and removing services (on failure)..."
-          docker compose down --remove-orphans --volumes
-          Write-Host "[OK] Teardown complete"
-
-      - name: Services deployed successfully
-        if: success()
-        shell: powershell
-        run: |
-          Write-Host "[OK] Services deployed and running!"
-          docker compose ps
-
-      - name: Display service logs
-        if: always()
-        shell: powershell
-        run: |
-          Write-Host "`n========================================" -ForegroundColor Cyan
-          Write-Host "CONTAINER STATUS" -ForegroundColor Cyan
-          Write-Host "========================================`n" -ForegroundColor Cyan
-          docker compose ps
-
-          Write-Host "`n========================================" -ForegroundColor Cyan
-          Write-Host "APP LOGS" -ForegroundColor Cyan
-          Write-Host "========================================`n" -ForegroundColor Cyan
-          docker logs app --tail=100
-
-          Write-Host "`n========================================" -ForegroundColor Cyan
-          Write-Host "DATABASE LOGS" -ForegroundColor Cyan
-          Write-Host "========================================`n" -ForegroundColor Cyan
-          docker logs db --tail=50
-
-          Write-Host "`n========================================" -ForegroundColor Cyan
-          Write-Host "MINIO LOGS" -ForegroundColor Cyan
-          Write-Host "========================================`n" -ForegroundColor Cyan
-          docker logs minio --tail=50
-
-      - name: Display final logs
-        if: always()
-        shell: powershell
-        run: |
-          Write-Host "`n========================================" -ForegroundColor Cyan
-          Write-Host "FINAL SERVICE STATUS" -ForegroundColor Cyan
-          Write-Host "========================================`n" -ForegroundColor Cyan
-
-          docker compose ps
-
-          Write-Host "`n========================================" -ForegroundColor Cyan
-          Write-Host "APP LOGS" -ForegroundColor Cyan
-          Write-Host "========================================`n" -ForegroundColor Cyan
-
-          docker logs app --tail=100 2>&1
-
+          Write-Host "`n⚠ Deployment failed, collecting diagnostic info..." -ForegroundColor Yellow
+          docker compose logs
+          docker system df
           exit 0
