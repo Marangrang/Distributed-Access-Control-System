@@ -52,9 +52,9 @@ RUN chmod +x /app/entrypoint.sh
 COPY serve/ /app/serve/
 COPY verification_service/ /app/verification_service/
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
-    CMD curl -f http://localhost:8000/health || exit 1
+# Health check - increase start period to allow full startup
+HEALTHCHECK --interval=30s --timeout=10s --start-period=180s --retries=3 \
+    CMD curl -fsS http://localhost:8000/health || exit 1
 
 EXPOSE 8000
 CMD ["/app/entrypoint.sh"]

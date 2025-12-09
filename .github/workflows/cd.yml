@@ -98,62 +98,62 @@ jobs:
           Write-Host "Docker images:"
           docker images | Select-String "distributed-access-control-system"
 
-          Write-Host "`nDocker compose config (first 50 lines):"
-          $config = docker compose config
-          $config | Select-Object -First 50
+          Write-Host "`nDocker compose config (first 30 lines):"
+          docker compose config | Select-Object -First 30
 
-          Write-Host "`nDocker compose ps:"
-          docker compose ps
-
-      - name: Start services
+      - name: Starting services...
         shell: powershell
         run: |
           Write-Host "Starting services..."
+          docker compose down --remove-orphans -v 2>&1 | Out-Null
           docker compose up -d
-          if ($LASTEXITCODE -ne 0) {
-            Write-Host "[ERROR] Failed to start services"
-            docker compose ps
-            docker compose logs --tail=50
-            exit 1
-          }
           Write-Host "[OK] Services started"
 
-      - name: Wait for services to be healthy
+      - name: Stream logs while waiting for health
         shell: powershell
-        timeout-minutes: 5
+        timeout-minutes: 10
         run: |
-          Write-Host "Waiting for services to be healthy..."
-          $maxAttempts = 30
-          $attempt = 0
-          $allHealthy = $false
+          Write-Host "Starting services and streaming logs..."
 
-          while (-not $allHealthy -and $attempt -lt $maxAttempts) {
+          # Start services
+          docker compose up -d
+
+          Write-Host "`n========================================" -ForegroundColor Cyan
+          Write-Host "STREAMING LIVE LOGS" -ForegroundColor Cyan
+          Write-Host "========================================`n" -ForegroundColor Cyan
+
+          # Stream logs from all services
+          $logProcess = Start-Process -NoNewWindow -PassThru `
+            -FilePath docker `
+            -ArgumentList "compose", "logs", "-f", "--tail=50"
+
+          # Wait for app to be healthy while logs stream
+          $maxAttempts = 120
+          $attempt = 0
+          $appHealthy = $false
+
+          while ($attempt -lt $maxAttempts -and -not $appHealthy) {
             $attempt++
-            Write-Host "Health check attempt $attempt/$maxAttempts..."
+            Start-Sleep -Seconds 5
 
             try {
-              $services = docker compose ps --format json | ConvertFrom-Json
-              $unhealthy = $services | Where-Object {
-                $_.Health -ne "healthy" -and $_.State -eq "running"
-              }
+              $ps = docker compose ps --format json | ConvertFrom-Json -ErrorAction SilentlyContinue
+              $appHealthy = $ps | Where-Object { $_.Service -eq "app" -and $_.State -match "healthy" }
 
-              if ($unhealthy.Count -eq 0) {
-                $allHealthy = $true
-                Write-Host "[OK] All services are healthy"
-              } else {
-                Write-Host "Waiting for: $($unhealthy.Service -join ', ')"
-                Start-Sleep -Seconds 5
+              if ($appHealthy) {
+                Write-Host "`n[OK] App is healthy!`n" -ForegroundColor Green
+                Stop-Process -Id $logProcess.Id -ErrorAction SilentlyContinue
+                break
               }
             } catch {
-              Write-Host "Error checking service health, retrying..."
-              Start-Sleep -Seconds 5
+              # Ignore errors during health checks
             }
           }
 
-          if (-not $allHealthy) {
-            Write-Host "[ERROR] Services failed to become healthy"
+          if (-not $appHealthy) {
+            Write-Host "[ERROR] App failed to become healthy" -ForegroundColor Red
+            Stop-Process -Id $logProcess.Id -ErrorAction SilentlyContinue
             docker compose ps
-            docker compose logs --tail=50
             exit 1
           }
 
@@ -332,19 +332,26 @@ jobs:
           Write-Host "[OK] Services deployed and running!"
           docker compose ps
 
-      - name: Show service logs
+      - name: Display service logs
         if: always()
         shell: powershell
-        continue-on-error: true
         run: |
-          Write-Host "`n=== DOCKER COMPOSE STATUS ==="
-          docker compose ps -a
+          Write-Host "`n========================================" -ForegroundColor Cyan
+          Write-Host "CONTAINER STATUS" -ForegroundColor Cyan
+          Write-Host "========================================`n" -ForegroundColor Cyan
+          docker compose ps
 
-          Write-Host "`n=== APP CONTAINER LOGS ==="
+          Write-Host "`n========================================" -ForegroundColor Cyan
+          Write-Host "APP LOGS" -ForegroundColor Cyan
+          Write-Host "========================================`n" -ForegroundColor Cyan
           docker logs app --tail=100
 
-          Write-Host "`n=== DB CONTAINER LOGS ==="
+          Write-Host "`n========================================" -ForegroundColor Cyan
+          Write-Host "DATABASE LOGS" -ForegroundColor Cyan
+          Write-Host "========================================`n" -ForegroundColor Cyan
           docker logs db --tail=50
 
-          Write-Host "`n=== MINIO CONTAINER LOGS ==="
+          Write-Host "`n========================================" -ForegroundColor Cyan
+          Write-Host "MINIO LOGS" -ForegroundColor Cyan
+          Write-Host "========================================`n" -ForegroundColor Cyan
           docker logs minio --tail=50
