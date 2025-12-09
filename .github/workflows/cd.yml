@@ -92,6 +92,15 @@ jobs:
           if ($LASTEXITCODE -ne 0) { Write-Error "Build failed"; exit 1 }
           Write-Host "[OK] Docker images built successfully"
 
+      - name: Check Docker images
+        shell: powershell
+        run: |
+          Write-Host "Docker images:"
+          docker images | grep distributed-access-control-system
+
+          Write-Host "`nDocker compose config:"
+          docker compose config | head -50
+
       - name: Start services
         shell: powershell
         run: |
@@ -236,31 +245,32 @@ jobs:
           Write-Host "Collecting logs..."
           New-Item -ItemType Directory -Force -Path logs | Out-Null
 
-          try {
-            # Get only compose project containers
-            $containers = @(docker ps -a --filter "label=com.docker.compose.project=distributed-access-control-system" --format "{{.Names}}")
+          $containers = @("app", "db", "minio")
 
-            if ($containers.Count -eq 0) {
-              # Fallback: try by exact names
-              $containers = @(docker ps -a --format "{{.Names}}" | Where-Object { $_ -match '^(app|db|minio)$' })
+          foreach ($container in $containers) {
+            Write-Host "Collecting logs for $container..."
+            try {
+              $logs = docker logs $container --tail=500 2>&1
+              $logs | Out-File -FilePath "logs/${container}.log" -Encoding UTF8 -Force
+              Write-Host "Successfully collected logs for $container"
+            } catch {
+              Write-Host "[WARNING] Failed to collect logs for $container`: $_"
             }
-
-            Write-Host "Found containers: $($containers -join ', ')"
-
-            if ($containers.Count -gt 0) {
-              foreach ($container in $containers) {
-                Write-Host "Collecting logs for $container..."
-                docker logs $container --tail=200 > "logs/${container}.log" 2>&1
-              }
-            } else {
-              Write-Host "[WARNING] No containers found for log collection"
-            }
-          } catch {
-            Write-Host "[WARNING] Error collecting logs: $_"
           }
 
-          Write-Host "[OK] Log collection completed"
-          Get-ChildItem logs/ -ErrorAction SilentlyContinue
+          Write-Host "`n=== APP LOGS (last 200 lines) ==="
+          if (Test-Path "logs/app.log") {
+            Get-Content "logs/app.log" -Tail 200
+          } else {
+            Write-Host "app.log not found"
+          }
+
+          Write-Host "`n=== DB LOGS (last 50 lines) ==="
+          if (Test-Path "logs/db.log") {
+            Get-Content "logs/db.log" -Tail 50
+          }
+
+          Get-ChildItem logs/
           exit 0
 
       - name: Upload deployment logs
