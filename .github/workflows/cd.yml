@@ -252,29 +252,43 @@ jobs:
           $containers = @("app", "db", "minio")
 
           foreach ($container in $containers) {
-            Write-Host "Collecting logs for $container..."
+            Write-Host "`n=== Collecting logs for $container ==="
             try {
-              $logs = docker logs $container --tail=500 2>&1
+              $logs = docker logs $container --tail=200 2>&1
               $logs | Out-File -FilePath "logs/${container}.log" -Encoding UTF8 -Force
-              Write-Host "Successfully collected logs for $container"
+              Write-Host "✓ Successfully collected logs for $container"
+              Write-Host $logs
             } catch {
-              Write-Host "[WARNING] Failed to collect logs for $container`: $_"
+              Write-Host "[WARNING] Failed to collect logs for $container: $_"
             }
           }
 
-          Write-Host "`n=== APP LOGS (last 200 lines) ==="
+          Write-Host "`n========================================`n"
+          Write-Host "APP LOGS:"
+          Write-Host "========================================`n"
           if (Test-Path "logs/app.log") {
-            Get-Content "logs/app.log" -Tail 200
+            Get-Content "logs/app.log"
           } else {
             Write-Host "app.log not found"
           }
 
-          Write-Host "`n=== DB LOGS (last 50 lines) ==="
+          Write-Host "`n========================================`n"
+          Write-Host "DATABASE LOGS:"
+          Write-Host "========================================`n"
           if (Test-Path "logs/db.log") {
-            Get-Content "logs/db.log" -Tail 50
+            Get-Content "logs/db.log" | Select-Object -Last 100
           }
 
-          Get-ChildItem logs/
+          Write-Host "`n========================================`n"
+          Write-Host "MINIO LOGS:"
+          Write-Host "========================================`n"
+          if (Test-Path "logs/minio.log") {
+            Get-Content "logs/minio.log" | Select-Object -Last 50
+          }
+
+          Write-Host "`n========================================`n"
+          Write-Host "Files collected:"
+          Get-ChildItem logs/ | Format-Table
           exit 0
 
       - name: Upload deployment logs
@@ -317,3 +331,20 @@ jobs:
         run: |
           Write-Host "[OK] Services deployed and running!"
           docker compose ps
+
+      - name: Show service logs
+        if: always()
+        shell: powershell
+        continue-on-error: true
+        run: |
+          Write-Host "`n=== DOCKER COMPOSE STATUS ==="
+          docker compose ps -a
+
+          Write-Host "`n=== APP CONTAINER LOGS ==="
+          docker logs app --tail=100
+
+          Write-Host "`n=== DB CONTAINER LOGS ==="
+          docker logs db --tail=50
+
+          Write-Host "`n=== MINIO CONTAINER LOGS ==="
+          docker logs minio --tail=50
