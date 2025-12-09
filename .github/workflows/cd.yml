@@ -4,15 +4,6 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
-    inputs:
-      environment:
-        description: "Deployment environment"
-        required: false
-        default: "staging"
-        type: choice
-        options:
-          - staging
-          - production
 
 permissions:
   contents: read
@@ -25,7 +16,6 @@ concurrency:
 env:
   REGISTRY: docker.io
   IMAGE_NAME: distributed-access-control-system-app
-  COMPOSE_PROJECT_NAME: dacs
   LOG_RETENTION_DAYS: 7
 
 jobs:
@@ -33,23 +23,14 @@ jobs:
     runs-on: self-hosted
     timeout-minutes: 60
 
-    outputs:
-      image-digest: ${{ steps.build.outputs.digest }}
-      build-time: ${{ steps.build.outputs.build-time }}
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
 
       - name: Validate environment
-        id: validate
         shell: powershell
         run: |
-          Write-Host "════════════════════════════════════════" -ForegroundColor Cyan
-          Write-Host "VALIDATING ENVIRONMENT" -ForegroundColor Cyan
-          Write-Host "════════════════════════════════════════" -ForegroundColor Cyan
+          Write-Host "Validating environment..." -ForegroundColor Cyan
 
           $requiredFiles = @(
             "docker-compose.yml",
@@ -61,9 +42,9 @@ jobs:
           $missingFiles = @()
           foreach ($file in $requiredFiles) {
             if (Test-Path $file) {
-              Write-Host "✓ $file" -ForegroundColor Green
+              Write-Host "OK $file" -ForegroundColor Green
             } else {
-              Write-Host "✗ $file MISSING" -ForegroundColor Red
+              Write-Host "MISSING $file" -ForegroundColor Red
               $missingFiles += $file
             }
           }
@@ -73,166 +54,85 @@ jobs:
             exit 1
           }
 
-          Write-Host "`nDirectory structure valid" -ForegroundColor Green
-          echo "valid=true" >> $env:GITHUB_OUTPUT
-
-      - name: Setup Docker environment
+      - name: Setup Docker
         shell: powershell
         run: |
-          Write-Host "`n════════════════════════════════════════" -ForegroundColor Cyan
-          Write-Host "SETTING UP DOCKER" -ForegroundColor Cyan
-          Write-Host "════════════════════════════════════════" -ForegroundColor Cyan
+          Write-Host "Setting up Docker..." -ForegroundColor Cyan
 
-          # Verify Docker daemon
           $maxRetries = 10
           $retryCount = 0
 
           while ($retryCount -lt $maxRetries) {
-            try {
-              $info = docker info --format '{{.OperatingSystem}}'
-              Write-Host "✓ Docker daemon ready" -ForegroundColor Green
-              Write-Host "  OS: $info"
+            docker ps 2>&1 | Out-Null
+            if ($LASTEXITCODE -eq 0) {
+              Write-Host "Docker daemon ready" -ForegroundColor Green
               break
-            } catch {
-              $retryCount++
-              if ($retryCount -ge $maxRetries) {
-                throw "Docker daemon not responding after $maxRetries attempts"
-              }
-              Write-Host "Docker daemon not ready ($retryCount/$maxRetries), retrying..."
-              Start-Sleep -Seconds 3
             }
+            $retryCount++
+            if ($retryCount -ge $maxRetries) {
+              throw "Docker daemon not responding"
+            }
+            Write-Host "Waiting for Docker ($retryCount/$maxRetries)..."
+            Start-Sleep -Seconds 3
           }
 
-          # Set build kit
-          $env:DOCKER_BUILDKIT = 1
-          $env:COMPOSE_DOCKER_CLI_BUILD = 1
-          Write-Host "✓ Docker BuildKit enabled" -ForegroundColor Green
+          Write-Host "Docker version:"
+          docker --version
+          Write-Host "Compose version:"
+          docker compose version
 
-      - name: Verify Docker versions
-        shell: powershell
-        run: |
-          Write-Host "`nVerifying versions..."
-
-          $docker_version = docker --version
-          $compose_version = docker compose version --short
-
-          Write-Host "  Docker: $docker_version"
-          Write-Host "  Compose: $compose_version"
-
-          if (-not $compose_version) {
-            throw "Docker Compose not available"
-          }
-
-      - name: Clean old resources
-        id: cleanup
+      - name: Cleanup old resources
         shell: powershell
         continue-on-error: true
         run: |
-          Write-Host "`n════════════════════════════════════════" -ForegroundColor Cyan
-          Write-Host "CLEANING OLD RESOURCES" -ForegroundColor Cyan
-          Write-Host "════════════════════════════════════════" -ForegroundColor Cyan
-
-          try {
-            # Stop and remove containers
-            Write-Host "Stopping containers..."
-            docker compose down --remove-orphans --volumes 2>&1 | Out-Null
-
-            # Remove dangling images
-            Write-Host "Removing dangling images..."
-            docker image prune -f --filter "dangling=true" 2>&1 | Out-Null
-
-            Write-Host "✓ Cleanup complete" -ForegroundColor Green
-          } catch {
-            Write-Host "⚠ Cleanup warning: $($_.Exception.Message)" -ForegroundColor Yellow
-          }
+          Write-Host "Cleaning up..." -ForegroundColor Cyan
+          docker compose down --remove-orphans --volumes 2>&1 | Out-Null
+          docker image prune -f --filter "dangling=true" 2>&1 | Out-Null
+          Write-Host "Cleanup complete" -ForegroundColor Green
 
       - name: Build Docker images
-        id: build
         shell: powershell
         timeout-minutes: 30
         run: |
-          Write-Host "`n════════════════════════════════════════" -ForegroundColor Cyan
-          Write-Host "BUILDING DOCKER IMAGES" -ForegroundColor Cyan
-          Write-Host "════════════════════════════════════════" -ForegroundColor Cyan
+          Write-Host "Building Docker images..." -ForegroundColor Cyan
 
-          $buildStart = Get-Date
+          $env:DOCKER_BUILDKIT = 1
+          $env:COMPOSE_DOCKER_CLI_BUILD = 1
 
-          try {
-            Write-Host "Building images with BuildKit..."
-            $output = docker compose build --no-cache 2>&1
-
-            if ($LASTEXITCODE -ne 0) {
-              Write-Host $output
-              throw "Docker build failed with exit code $LASTEXITCODE"
-            }
-
-            Write-Host "✓ Build successful" -ForegroundColor Green
-
-            # Get image digest
-            $digest = docker compose images -q 2>&1 | Select-Object -First 1
-
-            $buildTime = (Get-Date) - $buildStart
-
-            echo "digest=$digest" >> $env:GITHUB_OUTPUT
-            echo "build-time=$($buildTime.TotalSeconds)" >> $env:GITHUB_OUTPUT
-
-            Write-Host "  Digest: $digest"
-            Write-Host "  Build time: $($buildTime.TotalSeconds)s"
-
-          } catch {
-            Write-Error "Build failed: $_"
+          docker compose build --no-cache
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "Docker build failed"
             exit 1
           }
 
-      - name: Validate built images
+          Write-Host "Build successful" -ForegroundColor Green
+
+      - name: Verify images
         shell: powershell
         run: |
-          Write-Host "`nValidating images..."
-
-          $images = docker images --format json | ConvertFrom-Json
-          $appImage = $images | Where-Object { $_.Repository -match "distributed-access-control-system" }
-
-          if ($null -eq $appImage) {
-            throw "App image not found in Docker"
+          Write-Host "Verifying images..." -ForegroundColor Cyan
+          $images = docker images --format "{{.Repository}}:{{.Tag}}" | Select-String "distributed-access-control-system"
+          if ($null -eq $images) {
+            throw "App image not found"
           }
-
-          Write-Host "✓ Image found: $($appImage.Repository):$($appImage.Tag)" -ForegroundColor Green
-          Write-Host "  Size: $($appImage.Size)"
+          Write-Host "Image found: $images" -ForegroundColor Green
 
       - name: Start services
-        id: startup
         shell: powershell
-        timeout-minutes: 5
         run: |
-          Write-Host "`n════════════════════════════════════════" -ForegroundColor Cyan
-          Write-Host "STARTING SERVICES" -ForegroundColor Cyan
-          Write-Host "════════════════════════════════════════" -ForegroundColor Cyan
-
-          try {
-            Write-Host "Starting docker compose services..."
-            docker compose up -d
-
-            if ($LASTEXITCODE -ne 0) {
-              throw "Failed to start services"
-            }
-
-            Write-Host "✓ Services started" -ForegroundColor Green
-            Start-Sleep -Seconds 10
-
-          } catch {
-            Write-Error "Startup failed: $_"
-            docker compose ps
-            exit 1
+          Write-Host "Starting services..." -ForegroundColor Cyan
+          docker compose up -d
+          if ($LASTEXITCODE -ne 0) {
+            throw "Failed to start services"
           }
+          Write-Host "Services started" -ForegroundColor Green
+          Start-Sleep -Seconds 10
 
       - name: Wait for health checks
-        id: health
         shell: powershell
         timeout-minutes: 10
         run: |
-          Write-Host "`n════════════════════════════════════════" -ForegroundColor Cyan
-          Write-Host "WAITING FOR HEALTH CHECKS" -ForegroundColor Cyan
-          Write-Host "════════════════════════════════════════" -ForegroundColor Cyan
+          Write-Host "Waiting for health checks..." -ForegroundColor Cyan
 
           $maxAttempts = 120
           $attempt = 0
@@ -242,205 +142,112 @@ jobs:
             $attempt++
 
             try {
-              # Parse container status
               $psOutput = docker compose ps --format json
 
               if ([string]::IsNullOrEmpty($psOutput)) {
-                Write-Host "[$attempt/$maxAttempts] Waiting for containers..."
+                Write-Host "Waiting for containers ($attempt/$maxAttempts)..."
                 Start-Sleep -Seconds 5
                 continue
               }
 
-              $containers = $psOutput | ConvertFrom-Json -ErrorAction SilentlyContinue
-
-              if ($null -eq $containers) {
-                Write-Host "[$attempt/$maxAttempts] Invalid container data, retrying..."
-                Start-Sleep -Seconds 5
-                continue
-              }
-
-              # Ensure it's an array
+              $containers = $psOutput | ConvertFrom-Json -ErrorAction Stop
               if ($containers -isnot [array]) {
                 $containers = @($containers)
               }
 
-              # Check each service
-              $statuses = @()
-              foreach ($container in $containers) {
-                $statuses += "$($container.Service):$($container.State)"
-              }
-              Write-Host "[$attempt/$maxAttempts] $($statuses -join ' | ')"
-
-              # Validate health
               $app = $containers | Where-Object { $_.Service -eq "app" }
               $db = $containers | Where-Object { $_.Service -eq "db" }
               $minio = $containers | Where-Object { $_.Service -eq "minio" }
 
-              if ($null -eq $app -or $null -eq $db -or $null -eq $minio) {
-                Write-Host "[$attempt/$maxAttempts] Not all services started yet..."
-                Start-Sleep -Seconds 5
-                continue
+              if ($app -and $db -and $minio) {
+                Write-Host "Status: app=$($app.State) db=$($db.State) minio=$($minio.State)"
+
+                if ($app.State -match "healthy" -and $db.State -match "healthy" -and $minio.State -match "running|healthy") {
+                  Write-Host "All services healthy" -ForegroundColor Green
+                  $allHealthy = $true
+                  break
+                }
               }
-
-              # Check states
-              $appOk = $app.State -match "healthy|running"
-              $dbOk = $db.State -match "healthy"
-              $minioOk = $minio.State -match "healthy|running"
-
-              if ($appOk -and $dbOk -and $minioOk) {
-                Write-Host "`n✓ All services healthy" -ForegroundColor Green
-                $allHealthy = $true
-                echo "status=healthy" >> $env:GITHUB_OUTPUT
-                break
-              }
-
             } catch {
-              Write-Host "[$attempt/$maxAttempts] Health check error: $($_.Exception.Message)"
+              Write-Host "Health check error: $($_.Exception.Message)"
             }
 
             Start-Sleep -Seconds 5
           }
 
           if (-not $allHealthy) {
-            Write-Host "✗ Services failed to become healthy" -ForegroundColor Red
+            Write-Host "Services failed to become healthy" -ForegroundColor Red
             docker compose ps
-            echo "status=unhealthy" >> $env:GITHUB_OUTPUT
+            docker logs app --tail=100
             exit 1
           }
 
       - name: Smoke tests
-        id: tests
         shell: powershell
         continue-on-error: true
         run: |
-          Write-Host "`n════════════════════════════════════════" -ForegroundColor Cyan
-          Write-Host "RUNNING SMOKE TESTS" -ForegroundColor Cyan
-          Write-Host "════════════════════════════════════════" -ForegroundColor Cyan
+          Write-Host "Running smoke tests..." -ForegroundColor Cyan
 
-          $testsPassed = 0
-          $testsFailed = 0
-
-          # Test 1: API Health
-          Write-Host "`n[TEST 1] API Health endpoint..."
+          Write-Host "Test 1: API Health"
           try {
-            $resp = Invoke-WebRequest -Uri "http://localhost:8000/health" `
-              -UseBasicParsing -TimeoutSec 5 -ErrorAction Stop
-
+            $resp = Invoke-WebRequest -Uri "http://localhost:8000/health" -UseBasicParsing -TimeoutSec 5
             if ($resp.StatusCode -eq 200) {
-              Write-Host "✓ API healthy (200)" -ForegroundColor Green
-              $testsPassed++
-            } else {
-              throw "Unexpected status code: $($resp.StatusCode)"
+              Write-Host "API healthy" -ForegroundColor Green
             }
           } catch {
-            Write-Host "✗ API health test failed: $_" -ForegroundColor Red
-            $testsFailed++
+            Write-Host "API test failed: $_" -ForegroundColor Yellow
           }
 
-          # Test 2: Database connectivity
-          Write-Host "`n[TEST 2] Database connectivity..."
+          Write-Host "Test 2: Database"
+          docker compose exec -T db pg_isready -U NWUUSER -d face_verification_db
+
+          Write-Host "Test 3: MinIO"
           try {
-            $dbCheck = docker compose exec -T db `
-              pg_isready -U NWUUSER -d face_verification_db 2>&1
-
-            if ($LASTEXITCODE -eq 0) {
-              Write-Host "✓ Database ready" -ForegroundColor Green
-              $testsPassed++
-            } else {
-              throw "Database not ready"
-            }
+            Invoke-WebRequest -Uri "http://localhost:9000/minio/health/live" -UseBasicParsing -TimeoutSec 5 | Out-Null
+            Write-Host "MinIO healthy" -ForegroundColor Green
           } catch {
-            Write-Host "⚠ Database test skipped/failed: $_" -ForegroundColor Yellow
+            Write-Host "MinIO test failed" -ForegroundColor Yellow
           }
 
-          # Test 3: MinIO connectivity
-          Write-Host "`n[TEST 3] MinIO connectivity..."
-          try {
-            $minioCheck = Invoke-WebRequest -Uri "http://localhost:9000/minio/health/live" `
-              -UseBasicParsing -TimeoutSec 5 -ErrorAction Stop
-
-            if ($minioCheck.StatusCode -eq 200) {
-              Write-Host "✓ MinIO healthy" -ForegroundColor Green
-              $testsPassed++
-            }
-          } catch {
-            Write-Host "⚠ MinIO test skipped: $_" -ForegroundColor Yellow
-          }
-
-          Write-Host "`n$testsPassed passed, $testsFailed failed"
-          echo "passed=$testsPassed" >> $env:GITHUB_OUTPUT
-          echo "failed=$testsFailed" >> $env:GITHUB_OUTPUT
-
-      - name: Collect diagnostic logs
-        id: logs
+      - name: Collect logs
         if: always()
         shell: powershell
         run: |
-          Write-Host "`n════════════════════════════════════════" -ForegroundColor Cyan
-          Write-Host "COLLECTING LOGS" -ForegroundColor Cyan
-          Write-Host "════════════════════════════════════════" -ForegroundColor Cyan
-
+          Write-Host "Collecting logs..." -ForegroundColor Cyan
           New-Item -ItemType Directory -Force -Path logs | Out-Null
 
           @("app", "db", "minio") | ForEach-Object {
             $service = $_
-            Write-Host "Collecting logs for $service..."
-
-            try {
-              docker logs $service --tail=300 --timestamps 2>&1 | `
-                Out-File -FilePath "logs/$service.log" -Encoding UTF8 -Force
-              Write-Host "✓ Saved logs/$service.log" -ForegroundColor Green
-            } catch {
-              Write-Host "⚠ Failed to collect logs for $service" -ForegroundColor Yellow
-            }
+            Write-Host "Saving $service logs..."
+            docker logs $service --tail=300 --timestamps 2>&1 | Out-File -FilePath "logs/$service.log" -Encoding UTF8 -Force
           }
 
-          # Also save docker compose config
-          docker compose ps --format json 2>&1 | `
-            Out-File -FilePath "logs/docker-compose-status.json" -Encoding UTF8 -Force
+          docker compose ps --format json 2>&1 | Out-File -FilePath "logs/docker-status.json" -Encoding UTF8 -Force
 
-          Write-Host "`nLog files:"
-          Get-ChildItem logs/ -Recurse | Format-Table Name, Length
+          Write-Host "Log files:"
+          Get-ChildItem logs/ | Format-Table Name, Length
 
-      - name: Upload artifacts
+      - name: Upload logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: deployment-logs-${{ github.run_id }}-${{ github.run_number }}
+          name: deployment-logs-${{ github.run_id }}
           path: logs/
-          retention-days: ${{ env.LOG_RETENTION_DAYS }}
+          retention-days: 7
           if-no-files-found: warn
 
-      - name: Generate summary
+      - name: Summary
         if: always()
         shell: powershell
         run: |
-          Write-Host "`n════════════════════════════════════════" -ForegroundColor Cyan
-          Write-Host "DEPLOYMENT SUMMARY" -ForegroundColor Cyan
-          Write-Host "════════════════════════════════════════" -ForegroundColor Cyan
-
-          Write-Host "`nBuild Information:"
-          Write-Host "  Image Digest: ${{ steps.build.outputs.digest }}"
-          Write-Host "  Build Time: ${{ steps.build.outputs.build-time }}s"
-
-          Write-Host "`nHealth Status:"
-          Write-Host "  Status: ${{ steps.health.outputs.status }}"
-
-          Write-Host "`nTest Results:"
-          Write-Host "  Passed: ${{ steps.tests.outputs.passed }}"
-          Write-Host "  Failed: ${{ steps.tests.outputs.failed }}"
-
-          Write-Host "`nFinal Services Status:"
+          Write-Host "Deployment Summary" -ForegroundColor Cyan
+          Write-Host "Status: ${{ job.status }}"
           docker compose ps
-
-          Write-Host "`nDeployment: ${{ job.status }}" -ForegroundColor Green
 
       - name: Cleanup on failure
         if: failure()
         shell: powershell
-        continue-on-error: true
         run: |
-          Write-Host "`n⚠ Deployment failed, collecting diagnostic info..." -ForegroundColor Yellow
-          docker compose logs
+          Write-Host "Collecting failure diagnostics..." -ForegroundColor Yellow
+          docker compose logs --tail=100
           docker system df
-          exit 0
