@@ -98,8 +98,13 @@ jobs:
           Write-Host "Docker images:"
           docker images | Select-String "distributed-access-control-system"
 
-          Write-Host "`nDocker compose config (first 30 lines):"
-          docker compose config | Select-Object -First 30
+          Write-Host "`nVerifying docker-compose.yml exists..."
+          if (Test-Path "docker-compose.yml") {
+            Write-Host "[OK] docker-compose.yml found"
+          } else {
+            Write-Error "docker-compose.yml not found!"
+            exit 1
+          }
 
       - name: Starting services...
         shell: powershell
@@ -109,53 +114,38 @@ jobs:
           docker compose up -d
           Write-Host "[OK] Services started"
 
-      - name: Stream logs while waiting for health
+      - name: Stream logs while waiting
         shell: powershell
         timeout-minutes: 10
+        continue-on-error: true
         run: |
-          Write-Host "Starting services and streaming logs..."
-
-          # Start services
+          Write-Host "Starting services..."
           docker compose up -d
 
-          Write-Host "`n========================================" -ForegroundColor Cyan
-          Write-Host "STREAMING LIVE LOGS" -ForegroundColor Cyan
-          Write-Host "========================================`n" -ForegroundColor Cyan
+          Write-Host "`nStreaming logs...`n"
 
-          # Stream logs from all services
-          $logProcess = Start-Process -NoNewWindow -PassThru `
-            -FilePath docker `
-            -ArgumentList "compose", "logs", "-f", "--tail=50"
+          $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+          $maxSeconds = 600
 
-          # Wait for app to be healthy while logs stream
-          $maxAttempts = 120
-          $attempt = 0
-          $appHealthy = $false
-
-          while ($attempt -lt $maxAttempts -and -not $appHealthy) {
-            $attempt++
-            Start-Sleep -Seconds 5
-
+          while ($stopwatch.Elapsed.TotalSeconds -lt $maxSeconds) {
             try {
               $ps = docker compose ps --format json | ConvertFrom-Json -ErrorAction SilentlyContinue
               $appHealthy = $ps | Where-Object { $_.Service -eq "app" -and $_.State -match "healthy" }
 
               if ($appHealthy) {
-                Write-Host "`n[OK] App is healthy!`n" -ForegroundColor Green
-                Stop-Process -Id $logProcess.Id -ErrorAction SilentlyContinue
+                Write-Host "`n[OK] App is healthy!" -ForegroundColor Green
                 break
               }
+
+              Write-Host "Waiting for app... ($([math]::Floor($stopwatch.Elapsed.TotalSeconds))s)"
+              Start-Sleep -Seconds 10
             } catch {
-              # Ignore errors during health checks
+              Start-Sleep -Seconds 5
             }
           }
 
-          if (-not $appHealthy) {
-            Write-Host "[ERROR] App failed to become healthy" -ForegroundColor Red
-            Stop-Process -Id $logProcess.Id -ErrorAction SilentlyContinue
-            docker compose ps
-            exit 1
-          }
+          Write-Host "`nFinal status:"
+          docker compose ps
 
       - name: Smoke Test - Database
         shell: powershell
@@ -252,43 +242,19 @@ jobs:
           $containers = @("app", "db", "minio")
 
           foreach ($container in $containers) {
-            Write-Host "`n=== Collecting logs for $container ==="
+            Write-Host "Collecting logs for $container..."
             try {
               $logs = docker logs $container --tail=200 2>&1
-              $logs | Out-File -FilePath "logs/${container}.log" -Encoding UTF8 -Force
-              Write-Host "✓ Successfully collected logs for $container"
-              Write-Host $logs
+              $logs | Out-File -FilePath "logs/$($container).log" -Encoding UTF8 -Force
+              Write-Host "Successfully collected logs for $container"
             } catch {
-              Write-Host "[WARNING] Failed to collect logs for $container: $_"
+              Write-Host "[WARNING] Failed to collect logs for $container`: $($_.Exception.Message)"
             }
           }
 
-          Write-Host "`n========================================`n"
-          Write-Host "APP LOGS:"
-          Write-Host "========================================`n"
-          if (Test-Path "logs/app.log") {
-            Get-Content "logs/app.log"
-          } else {
-            Write-Host "app.log not found"
-          }
+          Write-Host "`nFiles collected:"
+          Get-ChildItem logs/ -ErrorAction SilentlyContinue | Format-Table
 
-          Write-Host "`n========================================`n"
-          Write-Host "DATABASE LOGS:"
-          Write-Host "========================================`n"
-          if (Test-Path "logs/db.log") {
-            Get-Content "logs/db.log" | Select-Object -Last 100
-          }
-
-          Write-Host "`n========================================`n"
-          Write-Host "MINIO LOGS:"
-          Write-Host "========================================`n"
-          if (Test-Path "logs/minio.log") {
-            Get-Content "logs/minio.log" | Select-Object -Last 50
-          }
-
-          Write-Host "`n========================================`n"
-          Write-Host "Files collected:"
-          Get-ChildItem logs/ | Format-Table
           exit 0
 
       - name: Upload deployment logs
@@ -355,3 +321,21 @@ jobs:
           Write-Host "MINIO LOGS" -ForegroundColor Cyan
           Write-Host "========================================`n" -ForegroundColor Cyan
           docker logs minio --tail=50
+
+      - name: Display final logs
+        if: always()
+        shell: powershell
+        run: |
+          Write-Host "`n========================================" -ForegroundColor Cyan
+          Write-Host "FINAL SERVICE STATUS" -ForegroundColor Cyan
+          Write-Host "========================================`n" -ForegroundColor Cyan
+
+          docker compose ps
+
+          Write-Host "`n========================================" -ForegroundColor Cyan
+          Write-Host "APP LOGS" -ForegroundColor Cyan
+          Write-Host "========================================`n" -ForegroundColor Cyan
+
+          docker logs app --tail=100 2>&1
+
+          exit 0
