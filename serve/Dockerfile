@@ -3,58 +3,57 @@ FROM python:3.9-slim AS builder
 
 WORKDIR /app
 
-# Install system dependencies
-RUN apt-get update && \
+RUN --mount=type=cache,target=/var/cache/apt \
+    apt-get update && \
     apt-get install -y --no-install-recommends \
-    curl \
-    git \
-    libgomp1 \
+    build-essential git curl libopenblas-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements
-COPY requirement.txt /app/requirement.txt
+COPY serve/requirement.txt .
 
-# Upgrade pip with longer timeout
+# Upgrade pip first (with timeout)
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install --default-timeout=1200 --upgrade pip setuptools wheel
 
-# Install PyTorch CPU version with retry logic and cache
+# Install PyTorch with aggressive caching
 RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install --default-timeout=1200 --retries 10 \
+    pip install --default-timeout=3000 --retries 5 \
     torch==2.0.1 torchvision==0.15.2 \
-    --index-url https://download.pytorch.org/whl/cpu
+    --index-url https://download.pytorch.org/whl/cpu \
+    --no-cache-dir
 
-# Install other requirements (excluding torch)
+# Install remaining deps (filter torch to avoid conflicts)
 RUN --mount=type=cache,target=/root/.cache/pip \
-    grep -v "^torch" requirement.txt > requirements_no_torch.txt || cp requirement.txt requirements_no_torch.txt && \
-    pip install --default-timeout=1200 -r requirements_no_torch.txt
+    grep -v "^torch" requirement.txt > requirements_no_torch.txt && \
+    pip install --default-timeout=3000 --retries 5 \
+    -r requirements_no_torch.txt \
+    --no-cache-dir
 
-# Stage: Final image
 FROM python:3.9-slim
 
 WORKDIR /app
 
-# Install runtime system dependencies
 RUN --mount=type=cache,target=/var/cache/apt \
-    apt-get update && apt-get install -y --no-install-recommends \
-    libgl1 postgresql-client curl netcat-openbsd \
+    apt-get update && \
+    apt-get install -y --no-install-recommends \
+    libgl1 postgresql-client curl netcat-openbsd libopenblas0 \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy Python packages from builder
 COPY --from=builder /usr/local/lib/python3.9/site-packages /usr/local/lib/python3.9/site-packages
 COPY --from=builder /usr/local/bin /usr/local/bin
 
-# Copy entrypoint FIRST (before serve/ to avoid overwrite)
 COPY serve/entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh
 
-# Copy application code (this will place entrypoint.sh at /app/serve/entrypoint.sh too, but we use /app/entrypoint.sh)
 COPY serve/ /app/serve/
 COPY verification_service/ /app/verification_service/
 
-# Health check - increase start period to allow full startup
-HEALTHCHECK --interval=30s --timeout=10s --start-period=180s --retries=3 \
-    CMD curl -fsS http://localhost:8000/health || exit 1
+ENV PYTHONUNBUFFERED=1
+ENV PORT=8000
 
 EXPOSE 8000
-CMD ["/app/entrypoint.sh"]
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=180s --retries=3 \
+    CMD curl -fsS http://localhost:${PORT}/health || exit 1
+
+ENTRYPOINT ["/app/entrypoint.sh"]

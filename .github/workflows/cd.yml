@@ -92,14 +92,18 @@ jobs:
 
       - name: Build Docker images
         shell: powershell
-        timeout-minutes: 60
+        timeout-minutes: 120
         run: |
           Write-Host "Building Docker images..." -ForegroundColor Cyan
 
           $env:DOCKER_BUILDKIT = 1
           $env:COMPOSE_DOCKER_CLI_BUILD = 1
+          $env:BUILDKIT_PROGRESS = "plain"
 
-          docker compose build --no-cache
+          # Increase Docker daemon timeout
+          docker system prune -f --volumes
+
+          docker compose build --no-cache --progress=plain
           if ($LASTEXITCODE -ne 0) {
             Write-Error "Docker build failed"
             exit 1
