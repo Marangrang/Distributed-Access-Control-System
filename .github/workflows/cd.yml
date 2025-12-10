@@ -90,12 +90,25 @@ jobs:
           docker image prune -f --filter "dangling=true" 2>&1 | Out-Null
           Write-Host "Cleanup complete" -ForegroundColor Green
 
+      - name: Free disk space
+        shell: powershell
+        run: |
+          Write-Host "Freeing disk space..." -ForegroundColor Cyan
+          docker system prune -af --volumes
+          Get-Volume | Select-Object DriveLetter, SizeRemaining | Format-Table
+
       - name: Build Docker image
         shell: powershell
+        timeout-minutes: 90
         run: |
           Write-Host "Building Docker image..." -ForegroundColor Cyan
 
-          docker build -t distributed-access-control-system-app -f serve/Dockerfile .
+          # Limit Docker memory/CPU to prevent runner crash
+          docker build \
+            --memory=4g \
+            --cpus=2 \
+            -t distributed-access-control-system-app \
+            -f serve/Dockerfile .
 
           if ($LASTEXITCODE -ne 0) {
             Write-Error "Docker build failed"
