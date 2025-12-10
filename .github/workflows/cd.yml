@@ -104,11 +104,7 @@ jobs:
           Write-Host "Building Docker image..." -ForegroundColor Cyan
 
           # Limit Docker memory/CPU to prevent runner crash
-          docker build \
-            --memory=4g \
-            --cpus=2 \
-            -t distributed-access-control-system-app \
-            -f serve/Dockerfile .
+          docker build --memory=4g --cpus=2 -t distributed-access-control-system-app -f serve/Dockerfile .
 
           if ($LASTEXITCODE -ne 0) {
             Write-Error "Docker build failed"
