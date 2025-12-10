@@ -21,7 +21,7 @@ env:
 jobs:
   build-and-deploy:
     runs-on: self-hosted
-    timeout-minutes: 60
+    timeout-minutes: 120
 
     steps:
       - name: Checkout code
@@ -116,6 +116,20 @@ jobs:
           }
 
           Write-Host "Build successful" -ForegroundColor Green
+
+      - name: Pull pre-built image
+        shell: powershell
+        run: |
+          Write-Host "Pulling pre-built image..." -ForegroundColor Cyan
+
+          # Option A: Pull from Docker Hub (if you pushed it)
+          # docker pull yourusername/distributed-access-control-system-app:latest
+
+          # Option B: Load from saved tar file
+          # docker load -i app-image.tar
+
+          # For now, use local build on your machine:
+          docker images
 
       - name: Verify images
         shell: powershell
