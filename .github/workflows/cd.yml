@@ -125,14 +125,37 @@ jobs:
           }
           Write-Host "Image found: $images" -ForegroundColor Green
 
+      - name: Pre-pull base images
+        shell: powershell
+        run: |
+          Write-Host "Pre-pulling images to warm cache..." -ForegroundColor Cyan
+          $images = @("python:3.9-slim", "ankane/pgvector:latest", "minio/minio:latest")
+          foreach ($img in $images) {
+            Write-Host "Pulling $img..." -ForegroundColor Yellow
+            docker pull $img
+            if ($LASTEXITCODE -ne 0) {
+              Write-Warning "Failed to pull $img; will retry during compose"
+            }
+          }
+
       - name: Start services
         shell: powershell
+        timeout-minutes: 15
         run: |
           Write-Host "Starting services..." -ForegroundColor Cyan
           docker compose down --remove-orphans
-          docker compose up -d
-          if ($LASTEXITCODE -ne 0) { throw "Failed to start services" }
-          # Small grace period for container creation
+
+          $max=3; $ok=$false
+          for ($i=1; $i -le $max -and -not $ok; $i++) {
+            Write-Host "Compose up attempt $i of $max..." -ForegroundColor Yellow
+            docker compose up -d
+            if ($LASTEXITCODE -eq 0) { $ok=$true; break }
+            Write-Host "Attempt $i failed; retrying in 30s..." -ForegroundColor Yellow
+            Start-Sleep -Seconds 30
+          }
+
+          if (-not $ok) { throw "Failed to start services after $max attempts" }
+          Write-Host "Services started" -ForegroundColor Green
           Start-Sleep -Seconds 15
 
       - name: Verify containers exist
@@ -207,7 +230,19 @@ jobs:
           docker buildx prune -af
           docker system prune -af --volumes
 
-      - name: Pre-pull base image
+      - name: Check network connectivity
         shell: powershell
         run: |
-          docker pull python:3.9-slim
+          Write-Host "Checking network..." -ForegroundColor Cyan
+          $retries = 3
+          for ($i=1; $i -le $retries; $i++) {
+            $result = Test-NetConnection -ComputerName docker.io -Port 443 -WarningAction SilentlyContinue
+            if ($result.TcpTestSucceeded) {
+              Write-Host "✓ Network OK" -ForegroundColor Green
+              break
+            }
+            if ($i -lt $retries) {
+              Write-Host "Network unstable, waiting 10s..." -ForegroundColor Yellow
+              Start-Sleep -Seconds 10
+            }
+          }
