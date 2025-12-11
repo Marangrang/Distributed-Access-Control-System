@@ -128,35 +128,44 @@ jobs:
       - name: Pre-pull base images
         shell: powershell
         run: |
-          Write-Host "Pre-pulling images to warm cache..." -ForegroundColor Cyan
-          $images = @("python:3.9-slim", "ankane/pgvector:latest", "minio/minio:latest")
+          Write-Host "Pre-pulling service images..." -ForegroundColor Cyan
+          $images = @(
+            "ankane/pgvector:latest",
+            "minio/minio:latest"
+          )
           foreach ($img in $images) {
             Write-Host "Pulling $img..." -ForegroundColor Yellow
-            docker pull $img
-            if ($LASTEXITCODE -ne 0) {
-              Write-Warning "Failed to pull $img; will retry during compose"
+            $attempt = 0
+            while ($attempt -lt 3) {
+              docker pull $img
+              if ($LASTEXITCODE -eq 0) { break }
+              $attempt++
+              Start-Sleep -Seconds 30
             }
           }
 
       - name: Start services
         shell: powershell
-        timeout-minutes: 15
+        timeout-minutes: 30
+        env:
+          COMPOSE_HTTP_TIMEOUT: 300
+          DOCKER_CLIENT_TIMEOUT: 300
         run: |
           Write-Host "Starting services..." -ForegroundColor Cyan
           docker compose down --remove-orphans
 
-          $max=3; $ok=$false
+          $max=5; $ok=$false
           for ($i=1; $i -le $max -and -not $ok; $i++) {
             Write-Host "Compose up attempt $i of $max..." -ForegroundColor Yellow
             docker compose up -d
             if ($LASTEXITCODE -eq 0) { $ok=$true; break }
             Write-Host "Attempt $i failed; retrying in 30s..." -ForegroundColor Yellow
-            Start-Sleep -Seconds 30
+            Start-Sleep -Seconds 60
           }
 
           if (-not $ok) { throw "Failed to start services after $max attempts" }
           Write-Host "Services started" -ForegroundColor Green
-          Start-Sleep -Seconds 15
+          Start-Sleep -Seconds 30
 
       - name: Verify containers exist
         shell: powershell
