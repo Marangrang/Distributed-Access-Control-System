@@ -102,11 +102,13 @@ jobs:
         timeout-minutes: 180
         env:
           DOCKER_BUILDKIT: 1
+          BUILDKIT_CREATE_ATTESTATIONS: 0
         run: |
           Write-Host "Building Docker image..." -ForegroundColor Cyan
           $max=3; $ok=$false
           for ($i=1; $i -le $max -and -not $ok; $i++) {
-            docker build -t distributed-access-control-system-app:latest -f serve/Dockerfile .
+            # Use local platform only to avoid multi-arch manifest export/unpack
+            docker build --platform=local -t distributed-access-control-system-app:latest -f serve/Dockerfile .
             if ($LASTEXITCODE -eq 0) { $ok=$true; break }
             Write-Host "Build attempt $i failed; retrying in 20s..." -ForegroundColor Yellow
             Start-Sleep -Seconds 20
@@ -128,7 +130,10 @@ jobs:
         run: |
           Write-Host "Starting services..." -ForegroundColor Cyan
           docker compose down --remove-orphans
-          docker compose up -d              # removed --pull and --build
+          docker compose up -d
+          if ($LASTEXITCODE -ne 0) { throw "Failed to start services" }
+          # Small grace period for container creation
+          Start-Sleep -Seconds 15
 
       - name: Verify containers exist
         shell: powershell
