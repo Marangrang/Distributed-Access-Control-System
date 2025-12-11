@@ -101,25 +101,17 @@ jobs:
         shell: powershell
         timeout-minutes: 180
         env:
-          DOCKER_BUILDKIT: 1 # Change from 0 to 1 - your Dockerfile uses --mount which requires BuildKit
+          DOCKER_BUILDKIT: 1
         run: |
           Write-Host "Building Docker image..." -ForegroundColor Cyan
-
-          # Check available memory before build
-          $mem = Get-CimInstance Win32_OperatingSystem
-          $freeGB = [math]::Round($mem.FreePhysicalMemory/1MB, 2)
-          Write-Host "Available memory: $freeGB GB" -ForegroundColor Yellow
-
-          if ($freeGB -lt 4) {
-            Write-Warning "Low memory detected. Build may fail."
+          $max=3; $ok=$false
+          for ($i=1; $i -le $max -and -not $ok; $i++) {
+            docker build -t distributed-access-control-system-app:latest -f serve/Dockerfile .
+            if ($LASTEXITCODE -eq 0) { $ok=$true; break }
+            Write-Host "Build attempt $i failed; retrying in 20s..." -ForegroundColor Yellow
+            Start-Sleep -Seconds 20
           }
-
-          docker build -t distributed-access-control-system-app:latest -f serve/Dockerfile .
-
-          if ($LASTEXITCODE -ne 0) {
-            Write-Error "Docker build failed"
-            exit 1
-          }
+          if (-not $ok) { Write-Error "Docker build failed after $max attempts"; exit 1 }
 
       - name: Verify images
         shell: powershell
@@ -136,7 +128,7 @@ jobs:
         run: |
           Write-Host "Starting services..." -ForegroundColor Cyan
           docker compose down --remove-orphans
-          docker compose up -d --pull missing  # Remove --build flag to avoid rebuilding
+          docker compose up -d              # removed --pull and --build
 
       - name: Verify containers exist
         shell: powershell
@@ -202,3 +194,15 @@ jobs:
           Write-Host "Collecting failure diagnostics..." -ForegroundColor Yellow
           docker compose logs --tail=100
           docker system df
+
+      - name: Prune build cache
+        shell: powershell
+        run: |
+          Write-Host "Pruning Docker build cache..." -ForegroundColor Cyan
+          docker buildx prune -af
+          docker system prune -af --volumes
+
+      - name: Pre-pull base image
+        shell: powershell
+        run: |
+          docker pull python:3.9-slim
