@@ -196,7 +196,7 @@ jobs:
             $exists = docker ps -a --format "{{.Names}}" | Select-String "^$service$"
             if ($exists) {
               Write-Host "Saving $service logs..."
-              docker logs $service --tail=300 --timestamps 2>&1 | Out-File -FilePath "logs/$service.log" -Encoding UTF8 -Force
+              docker logs $service --tail=300 --timestamps 2>&1 | Out-File -FilePath "logs/$service.log" -Encoding UTF8 -NoNewline -Force
             } else {
               Write-Host "Skipping $service logs (container not found)" -ForegroundColor Yellow
             }
