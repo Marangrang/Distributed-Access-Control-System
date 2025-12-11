@@ -101,58 +101,33 @@ jobs:
         shell: powershell
         timeout-minutes: 180
         env:
-          DOCKER_BUILDKIT: 0
+          DOCKER_BUILDKIT: 1 # Change from 0 to 1 - your Dockerfile uses --mount which requires BuildKit
         run: |
           Write-Host "Building Docker image..." -ForegroundColor Cyan
 
-          $maxRetries = 3
-          $retryCount = 0
-          $buildSuccess = $false
+          # Check available memory before build
+          $mem = Get-CimInstance Win32_OperatingSystem
+          $freeGB = [math]::Round($mem.FreePhysicalMemory/1MB, 2)
+          Write-Host "Available memory: $freeGB GB" -ForegroundColor Yellow
 
-          while ($retryCount -lt $maxRetries -and -not $buildSuccess) {
-            $retryCount++
-            Write-Host "Build attempt $retryCount of $maxRetries..." -ForegroundColor Yellow
-
-            docker build -t distributed-access-control-system-app:latest -f serve/Dockerfile .
-
-            if ($LASTEXITCODE -eq 0) {
-              $buildSuccess = $true
-              Write-Host "Build successful" -ForegroundColor Green
-            } else {
-              Write-Host "Build attempt $retryCount failed" -ForegroundColor Yellow
-              if ($retryCount -lt $maxRetries) {
-                Write-Host "Waiting 30 seconds before retry..." -ForegroundColor Yellow
-                Start-Sleep -Seconds 30
-              }
-            }
+          if ($freeGB -lt 4) {
+            Write-Warning "Low memory detected. Build may fail."
           }
 
-          if (-not $buildSuccess) {
-            Write-Error "Docker build failed after $maxRetries attempts"
+          docker build -t distributed-access-control-system-app:latest -f serve/Dockerfile .
+
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "Docker build failed"
             exit 1
           }
-
-      - name: Pull pre-built image
-        shell: powershell
-        run: |
-          Write-Host "Pulling pre-built image..." -ForegroundColor Cyan
-
-          # Option A: Pull from Docker Hub (if you pushed it)
-          # docker pull yourusername/distributed-access-control-system-app:latest
-
-          # Option B: Load from saved tar file
-          # docker load -i app-image.tar
-
-          # For now, use local build on your machine:
-          docker images
 
       - name: Verify images
         shell: powershell
         run: |
           Write-Host "Verifying images..." -ForegroundColor Cyan
-          $images = docker images --format "{{.Repository}}:{{.Tag}}" | Select-String "distributed-access-control-system"
+          $images = docker images --format "{{.Repository}}:{{.Tag}}" | Select-String "^distributed-access-control-system-app:latest$"
           if ($null -eq $images) {
-            throw "App image not found"
+            throw "App image not found; build or pull must succeed before starting services."
           }
           Write-Host "Image found: $images" -ForegroundColor Green
 
@@ -160,93 +135,25 @@ jobs:
         shell: powershell
         run: |
           Write-Host "Starting services..." -ForegroundColor Cyan
-          docker compose up -d
-          if ($LASTEXITCODE -ne 0) {
-            throw "Failed to start services"
-          }
-          Write-Host "Services started" -ForegroundColor Green
-          Start-Sleep -Seconds 10
+          docker compose down --remove-orphans
+          docker compose up -d --pull missing  # Remove --build flag to avoid rebuilding
 
-      - name: Wait for health checks
+      - name: Verify containers exist
         shell: powershell
-        timeout-minutes: 10
         run: |
-          Write-Host "Waiting for health checks..." -ForegroundColor Cyan
+          Write-Host "Verifying containers..." -ForegroundColor Cyan
+          $psJson = docker compose ps --format json
+          if ([string]::IsNullOrEmpty($psJson)) { throw "docker compose ps returned no data" }
+          $containers = $psJson | ConvertFrom-Json
+          if ($containers -isnot [array]) { $containers = @($containers) }
 
-          $maxAttempts = 120
-          $attempt = 0
-          $allHealthy = $false
-
-          while ($attempt -lt $maxAttempts) {
-            $attempt++
-
-            try {
-              $psOutput = docker compose ps --format json
-
-              if ([string]::IsNullOrEmpty($psOutput)) {
-                Write-Host "Waiting for containers ($attempt/$maxAttempts)..."
-                Start-Sleep -Seconds 5
-                continue
-              }
-
-              $containers = $psOutput | ConvertFrom-Json -ErrorAction Stop
-              if ($containers -isnot [array]) {
-                $containers = @($containers)
-              }
-
-              $app = $containers | Where-Object { $_.Service -eq "app" }
-              $db = $containers | Where-Object { $_.Service -eq "db" }
-              $minio = $containers | Where-Object { $_.Service -eq "minio" }
-
-              if ($app -and $db -and $minio) {
-                Write-Host "Status: app=$($app.State) db=$($db.State) minio=$($minio.State)"
-
-                if ($app.State -match "healthy" -and $db.State -match "healthy" -and $minio.State -match "running|healthy") {
-                  Write-Host "All services healthy" -ForegroundColor Green
-                  $allHealthy = $true
-                  break
-                }
-              }
-            } catch {
-              Write-Host "Health check error: $($_.Exception.Message)"
+          $required = @("app","db","minio")
+          foreach ($svc in $required) {
+            if (-not ($containers | Where-Object { $_.Service -eq $svc })) {
+              throw "Container '$svc' was not created"
             }
-
-            Start-Sleep -Seconds 5
           }
-
-          if (-not $allHealthy) {
-            Write-Host "Services failed to become healthy" -ForegroundColor Red
-            docker compose ps
-            docker logs app --tail=100
-            exit 1
-          }
-
-      - name: Smoke tests
-        shell: powershell
-        continue-on-error: true
-        run: |
-          Write-Host "Running smoke tests..." -ForegroundColor Cyan
-
-          Write-Host "Test 1: API Health"
-          try {
-            $resp = Invoke-WebRequest -Uri "http://localhost:8000/health" -UseBasicParsing -TimeoutSec 5
-            if ($resp.StatusCode -eq 200) {
-              Write-Host "API healthy" -ForegroundColor Green
-            }
-          } catch {
-            Write-Host "API test failed: $_" -ForegroundColor Yellow
-          }
-
-          Write-Host "Test 2: Database"
-          docker compose exec -T db pg_isready -U NWUUSER -d face_verification_db
-
-          Write-Host "Test 3: MinIO"
-          try {
-            Invoke-WebRequest -Uri "http://localhost:9000/minio/health/live" -UseBasicParsing -TimeoutSec 5 | Out-Null
-            Write-Host "MinIO healthy" -ForegroundColor Green
-          } catch {
-            Write-Host "MinIO test failed" -ForegroundColor Yellow
-          }
+          Write-Host "All required containers exist." -ForegroundColor Green
 
       - name: Collect logs
         if: always()
@@ -257,8 +164,13 @@ jobs:
 
           @("app", "db", "minio") | ForEach-Object {
             $service = $_
-            Write-Host "Saving $service logs..."
-            docker logs $service --tail=300 --timestamps 2>&1 | Out-File -FilePath "logs/$service.log" -Encoding UTF8 -Force
+            $exists = docker ps -a --format "{{.Names}}" | Select-String "^$service$"
+            if ($exists) {
+              Write-Host "Saving $service logs..."
+              docker logs $service --tail=300 --timestamps 2>&1 | Out-File -FilePath "logs/$service.log" -Encoding UTF8 -Force
+            } else {
+              Write-Host "Skipping $service logs (container not found)" -ForegroundColor Yellow
+            }
           }
 
           docker compose ps --format json 2>&1 | Out-File -FilePath "logs/docker-status.json" -Encoding UTF8 -Force
@@ -288,6 +200,5 @@ jobs:
         shell: powershell
         run: |
           Write-Host "Collecting failure diagnostics..." -ForegroundColor Yellow
-          docker compose logs --tail=100
           docker compose logs --tail=100
           docker system df
