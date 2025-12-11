@@ -177,7 +177,7 @@ jobs:
 
       - name: Upload logs
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: deployment-logs-${{ github.run_id }}
           path: logs/

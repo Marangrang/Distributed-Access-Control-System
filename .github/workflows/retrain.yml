@@ -26,7 +26,7 @@ jobs:
           python train/build_index.py || true
 
       - name: Upload artifacts (to workflow)
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: faiss-artifacts
           path: verification_service/faiss_index/
