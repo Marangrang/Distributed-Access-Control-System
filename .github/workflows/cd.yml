@@ -100,17 +100,37 @@ jobs:
       - name: Build Docker image
         shell: powershell
         timeout-minutes: 180
+        env:
+          DOCKER_BUILDKIT: 0
         run: |
           Write-Host "Building Docker image..." -ForegroundColor Cyan
 
-          docker build -t distributed-access-control-system-app:latest -f serve/Dockerfile .
+          $maxRetries = 3
+          $retryCount = 0
+          $buildSuccess = $false
 
-          if ($LASTEXITCODE -ne 0) {
-            Write-Error "Docker build failed"
-            exit 1
+          while ($retryCount -lt $maxRetries -and -not $buildSuccess) {
+            $retryCount++
+            Write-Host "Build attempt $retryCount of $maxRetries..." -ForegroundColor Yellow
+
+            docker build -t distributed-access-control-system-app:latest -f serve/Dockerfile .
+
+            if ($LASTEXITCODE -eq 0) {
+              $buildSuccess = $true
+              Write-Host "Build successful" -ForegroundColor Green
+            } else {
+              Write-Host "Build attempt $retryCount failed" -ForegroundColor Yellow
+              if ($retryCount -lt $maxRetries) {
+                Write-Host "Waiting 30 seconds before retry..." -ForegroundColor Yellow
+                Start-Sleep -Seconds 30
+              }
+            }
           }
 
-          Write-Host "Build successful" -ForegroundColor Green
+          if (-not $buildSuccess) {
+            Write-Error "Docker build failed after $maxRetries attempts"
+            exit 1
+          }
 
       - name: Pull pre-built image
         shell: powershell
