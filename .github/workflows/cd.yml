@@ -99,12 +99,11 @@ jobs:
 
       - name: Build Docker image
         shell: powershell
-        timeout-minutes: 90
+        timeout-minutes: 180
         run: |
           Write-Host "Building Docker image..." -ForegroundColor Cyan
 
-          # Limit Docker memory/CPU to prevent runner crash
-          docker build --memory=4g --cpus=2 -t distributed-access-control-system-app -f serve/Dockerfile .
+          docker build -t distributed-access-control-system-app:latest -f serve/Dockerfile .
 
           if ($LASTEXITCODE -ne 0) {
             Write-Error "Docker build failed"
@@ -269,5 +268,6 @@ jobs:
         shell: powershell
         run: |
           Write-Host "Collecting failure diagnostics..." -ForegroundColor Yellow
+          docker compose logs --tail=100
           docker compose logs --tail=100
           docker system df
