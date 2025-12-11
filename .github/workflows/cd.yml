@@ -107,8 +107,8 @@ jobs:
           Write-Host "Building Docker image..." -ForegroundColor Cyan
           $max=3; $ok=$false
           for ($i=1; $i -le $max -and -not $ok; $i++) {
-            # Use local platform only to avoid multi-arch manifest export/unpack
-            docker build --platform=local -t distributed-access-control-system-app:latest -f serve/Dockerfile .
+            # Removed --platform=local to use default platform
+            docker build -t distributed-access-control-system-app:latest -f serve/Dockerfile .
             if ($LASTEXITCODE -eq 0) { $ok=$true; break }
             Write-Host "Build attempt $i failed; retrying in 20s..." -ForegroundColor Yellow
             Start-Sleep -Seconds 20
@@ -183,28 +183,6 @@ jobs:
           path: logs/
           retention-days: 7
           if-no-files-found: warn
-
-      - name: Save image as tar
-        shell: powershell
-        run: |
-          docker save distributed-access-control-system-app:latest -o app-image.tar
-
-      - name: Upload image
-        uses: actions/upload-artifact@v4
-        with:
-          name: app-image
-          path: app-image.tar
-
-      - name: Load image tar
-        uses: actions/download-artifact@v4
-        with:
-          name: app-image
-
-      - name: Load image into Docker
-        shell: powershell
-        run: |
-          docker load -i app-image.tar
-          docker compose up -d
 
       - name: Summary
         if: always()

@@ -50,9 +50,7 @@ services:
     restart: unless-stopped
 
   app:
-    build:
-      context: .
-      dockerfile: serve/Dockerfile
+    image: distributed-access-control-system-app:latest
     container_name: app
     environment:
       DB_HOST: db
