@@ -184,6 +184,28 @@ jobs:
           retention-days: 7
           if-no-files-found: warn
 
+      - name: Save image as tar
+        shell: powershell
+        run: |
+          docker save distributed-access-control-system-app:latest -o app-image.tar
+
+      - name: Upload image
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-image
+          path: app-image.tar
+
+      - name: Load image tar
+        uses: actions/download-artifact@v4
+        with:
+          name: app-image
+
+      - name: Load image into Docker
+        shell: powershell
+        run: |
+          docker load -i app-image.tar
+          docker compose up -d
+
       - name: Summary
         if: always()
         shell: powershell
