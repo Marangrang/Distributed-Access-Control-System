@@ -189,6 +189,7 @@ jobs:
         shell: powershell
         run: |
           Write-Host "Collecting logs..." -ForegroundColor Cyan
+          $ErrorActionPreference = 'Continue'
           New-Item -ItemType Directory -Force -Path logs | Out-Null
 
           @("app", "db", "minio") | ForEach-Object {
@@ -196,13 +197,18 @@ jobs:
             $exists = docker ps -a --format "{{.Names}}" | Select-String "^$service$"
             if ($exists) {
               Write-Host "Saving $service logs..."
-              docker logs $service --tail=300 --timestamps 2>&1 | Out-File -FilePath "logs/$service.log" -Encoding UTF8 -NoNewline -Force
+              Start-Process -FilePath "docker" -ArgumentList "logs $service --tail=300 --timestamps" -NoNewWindow -Wait `
+                -RedirectStandardOutput "logs/$service.log" `
+                -RedirectStandardError  "logs/$service.log"
             } else {
               Write-Host "Skipping $service logs (container not found)" -ForegroundColor Yellow
             }
           }
 
-          docker compose ps --format json 2>&1 | Out-File -FilePath "logs/docker-status.json" -Encoding UTF8 -Force
+          Write-Host "Saving docker status..."
+          Start-Process -FilePath "docker" -ArgumentList "compose ps --format json" -NoNewWindow -Wait `
+            -RedirectStandardOutput "logs/docker-status.json" `
+            -RedirectStandardError  "logs/docker-status.json"
 
           Write-Host "Log files:"
           Get-ChildItem logs/ | Format-Table Name, Length
