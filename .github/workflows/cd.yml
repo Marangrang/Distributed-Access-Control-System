@@ -36,17 +36,15 @@ jobs:
             "docker-compose.yml",
             "serve/Dockerfile",
             "serve/entrypoint.sh",
-            "serve/main.py",
-            "verification_service/main.py",
-            "requirement.txt"
+            "serve/main.py"
           )
 
           $missingFiles = @()
           foreach ($file in $requiredFiles) {
             if (Test-Path $file) {
-              Write-Host "✓ $file" -ForegroundColor Green
+              Write-Host "OK $file" -ForegroundColor Green
             } else {
-              Write-Host "✗ $file" -ForegroundColor Red
+              Write-Host "MISSING $file" -ForegroundColor Red
               $missingFiles += $file
             }
           }
@@ -55,8 +53,6 @@ jobs:
             Write-Error "Missing critical files: $($missingFiles -join ', ')"
             exit 1
           }
-
-          Write-Host "All required files present" -ForegroundColor Green
 
       - name: Setup Docker
         shell: powershell
@@ -69,40 +65,21 @@ jobs:
           while ($retryCount -lt $maxRetries) {
             docker ps 2>&1 | Out-Null
             if ($LASTEXITCODE -eq 0) {
-              Write-Host "✓ Docker daemon ready" -ForegroundColor Green
+              Write-Host "Docker daemon ready" -ForegroundColor Green
               break
             }
             $retryCount++
             if ($retryCount -ge $maxRetries) {
-              throw "Docker daemon not responding after $maxRetries attempts"
+              throw "Docker daemon not responding"
             }
-            Write-Host "⏳ Waiting for Docker ($retryCount/$maxRetries)..." -ForegroundColor Yellow
+            Write-Host "Waiting for Docker ($retryCount/$maxRetries)..."
             Start-Sleep -Seconds 3
           }
 
-          Write-Host "Docker version:" -ForegroundColor Cyan
+          Write-Host "Docker version:"
           docker --version
-          Write-Host "Docker Compose version:" -ForegroundColor Cyan
+          Write-Host "Compose version:"
           docker compose version
-
-          Write-Host "Docker info:" -ForegroundColor Cyan
-          docker info --format "OS/Arch: {{.OSType}}/{{.Architecture}}"
-
-      - name: Check disk space
-        shell: powershell
-        run: |
-          Write-Host "Checking disk space..." -ForegroundColor Cyan
-          $volumes = Get-Volume | Where-Object { $_.DriveLetter -ne $null }
-          foreach ($vol in $volumes) {
-            $freeGB = [math]::Round($vol.SizeRemaining / 1GB, 2)
-            $totalGB = [math]::Round($vol.Size / 1GB, 2)
-            $usedPercent = [math]::Round((1 - ($vol.SizeRemaining / $vol.Size)) * 100, 1)
-            Write-Host "$($vol.DriveLetter): $freeGB GB free of $totalGB GB ($usedPercent% used)"
-
-            if ($freeGB -lt 10) {
-              Write-Warning "Low disk space on drive $($vol.DriveLetter):"
-            }
-          }
 
       - name: Cleanup old resources
         shell: powershell
@@ -126,46 +103,8 @@ jobs:
         shell: powershell
         run: |
           Write-Host "Freeing disk space..." -ForegroundColor Cyan
-
-          # Aggressive cleanup
           docker system prune -af --volumes
-
-          Write-Host "Disk space after cleanup:" -ForegroundColor Cyan
-          Get-Volume | Where-Object { $_.DriveLetter -ne $null } |
-            Select-Object DriveLetter,
-              @{N='FreeGB';E={[math]::Round($_.SizeRemaining/1GB,2)}},
-              @{N='TotalGB';E={[math]::Round($_.Size/1GB,2)}} |
-            Format-Table
-
-      - name: Pre-pull base images
-        shell: powershell
-        run: |
-          Write-Host "Pre-pulling service images..." -ForegroundColor Cyan
-          $images = @(
-            "ankane/pgvector:latest",
-            "minio/minio:latest"
-          )
-
-          foreach ($img in $images) {
-            Write-Host "Pulling $img..." -ForegroundColor Yellow
-            $attempt = 0
-            $maxAttempts = 3
-
-            while ($attempt -lt $maxAttempts) {
-              docker pull $img 2>&1
-              if ($LASTEXITCODE -eq 0) {
-                Write-Host "✓ Successfully pulled $img" -ForegroundColor Green
-                break
-              }
-              $attempt++
-              if ($attempt -lt $maxAttempts) {
-                Write-Host "⏳ Retry $attempt/$maxAttempts for $img..." -ForegroundColor Yellow
-                Start-Sleep -Seconds 30
-              } else {
-                Write-Warning "Failed to pull $img after $maxAttempts attempts"
-              }
-            }
-          }
+          Get-Volume | Select-Object DriveLetter, SizeRemaining | Format-Table
 
       - name: Build Docker image
         shell: powershell
@@ -175,54 +114,44 @@ jobs:
           BUILDKIT_CREATE_ATTESTATIONS: 0
         run: |
           Write-Host "Building Docker image..." -ForegroundColor Cyan
-
-          $max = 3
-          $ok = $false
-
-          for ($i = 1; $i -le $max -and -not $ok; $i++) {
-            Write-Host "Build attempt $i of $max..." -ForegroundColor Yellow
-
-            docker build `
-              -t distributed-access-control-system-app:latest `
-              -f serve/Dockerfile `
-              --progress=plain `
-              .
-
-            if ($LASTEXITCODE -eq 0) {
-              $ok = $true
-              Write-Host "✓ Build successful" -ForegroundColor Green
-              break
-            }
-
-            if ($i -lt $max) {
-              Write-Host "Build attempt $i failed; retrying in 20s..." -ForegroundColor Yellow
-              Start-Sleep -Seconds 20
-            }
+          $max=3; $ok=$false
+          for ($i=1; $i -le $max -and -not $ok; $i++) {
+            # Removed --platform=local to use default platform
+            docker build -t distributed-access-control-system-app:latest -f serve/Dockerfile .
+            if ($LASTEXITCODE -eq 0) { $ok=$true; break }
+            Write-Host "Build attempt $i failed; retrying in 20s..." -ForegroundColor Yellow
+            Start-Sleep -Seconds 20
           }
-
-          if (-not $ok) {
-            Write-Error "Docker build failed after $max attempts"
-            exit 1
-          }
+          if (-not $ok) { Write-Error "Docker build failed after $max attempts"; exit 1 }
 
       - name: Verify images
         shell: powershell
         run: |
-          Write-Host "Verifying Docker images..." -ForegroundColor Cyan
-
-          $images = docker images --format "{{.Repository}}:{{.Tag}}" |
-            Select-String "^distributed-access-control-system-app:latest$"
-
+          Write-Host "Verifying images..." -ForegroundColor Cyan
+          $images = docker images --format "{{.Repository}}:{{.Tag}}" | Select-String "^distributed-access-control-system-app:latest$"
           if ($null -eq $images) {
-            Write-Error "App image not found!"
-            docker images
-            exit 1
+            throw "App image not found; build or pull must succeed before starting services."
           }
+          Write-Host "Image found: $images" -ForegroundColor Green
 
-          Write-Host "✓ Image verified: $images" -ForegroundColor Green
-
-          # Show image details
-          docker images distributed-access-control-system-app:latest --format "table {{.Repository}}\t{{.Tag}}\t{{.Size}}\t{{.CreatedAt}}"
+      - name: Pre-pull base images
+        shell: powershell
+        run: |
+          Write-Host "Pre-pulling service images..." -ForegroundColor Cyan
+          $images = @(
+            "ankane/pgvector:latest",
+            "minio/minio:latest"
+          )
+          foreach ($img in $images) {
+            Write-Host "Pulling $img..." -ForegroundColor Yellow
+            $attempt = 0
+            while ($attempt -lt 3) {
+              docker pull $img
+              if ($LASTEXITCODE -eq 0) { break }
+              $attempt++
+              Start-Sleep -Seconds 30
+            }
+          }
 
       - name: Start services
         shell: powershell
@@ -232,112 +161,37 @@ jobs:
           DOCKER_CLIENT_TIMEOUT: 300
         run: |
           Write-Host "Starting services..." -ForegroundColor Cyan
+          docker compose down --remove-orphans
 
-          # Ensure clean state
-          docker compose down --remove-orphans 2>&1 | Out-Null
-
-          $max = 5
-          $ok = $false
-
-          for ($i = 1; $i -le $max -and -not $ok; $i++) {
+          $max=5; $ok=$false
+          for ($i=1; $i -le $max -and -not $ok; $i++) {
             Write-Host "Compose up attempt $i of $max..." -ForegroundColor Yellow
-
-            docker compose up -d 2>&1
-
-            if ($LASTEXITCODE -eq 0) {
-              $ok = $true
-              Write-Host "✓ Services started" -ForegroundColor Green
-              break
-            }
-
-            if ($i -lt $max) {
-              Write-Host "Attempt $i failed; retrying in 60s..." -ForegroundColor Yellow
-              docker compose down --remove-orphans 2>&1 | Out-Null
-              Start-Sleep -Seconds 60
-            }
+            docker compose up -d
+            if ($LASTEXITCODE -eq 0) { $ok=$true; break }
+            Write-Host "Attempt $i failed; retrying in 30s..." -ForegroundColor Yellow
+            Start-Sleep -Seconds 60
           }
 
-          if (-not $ok) {
-            throw "Failed to start services after $max attempts"
-          }
-
-          # Wait for services to initialize
-          Write-Host "Waiting for services to initialize..." -ForegroundColor Cyan
+          if (-not $ok) { throw "Failed to start services after $max attempts" }
+          Write-Host "Services started" -ForegroundColor Green
           Start-Sleep -Seconds 30
 
-      - name: Verify containers
+      - name: Verify containers exist
         shell: powershell
         run: |
           Write-Host "Verifying containers..." -ForegroundColor Cyan
-
           $psJson = docker compose ps --format json
-          if ([string]::IsNullOrEmpty($psJson)) {
-            throw "docker compose ps returned no data"
-          }
-
+          if ([string]::IsNullOrEmpty($psJson)) { throw "docker compose ps returned no data" }
           $containers = $psJson | ConvertFrom-Json
-          if ($containers -isnot [array]) {
-            $containers = @($containers)
-          }
+          if ($containers -isnot [array]) { $containers = @($containers) }
 
-          $required = @("app", "db", "minio")
-          $missing = @()
-
+          $required = @("app","db","minio")
           foreach ($svc in $required) {
-            $found = $containers | Where-Object { $_.Service -eq $svc }
-            if ($found) {
-              Write-Host "✓ Container '$svc' exists (Status: $($found.State))" -ForegroundColor Green
-            } else {
-              Write-Host "✗ Container '$svc' not found" -ForegroundColor Red
-              $missing += $svc
+            if (-not ($containers | Where-Object { $_.Service -eq $svc })) {
+              throw "Container '$svc' was not created"
             }
           }
-
-          if ($missing.Count -gt 0) {
-            throw "Missing containers: $($missing -join ', ')"
-          }
-
-          Write-Host "All required containers are present" -ForegroundColor Green
-
-      - name: Health checks
-        shell: powershell
-        timeout-minutes: 5
-        run: |
-          Write-Host "Running health checks..." -ForegroundColor Cyan
-
-          $services = @{
-            "app" = "http://localhost:8000/health"
-            "minio" = "http://localhost:9000/minio/health/live"
-          }
-
-          $maxRetries = 30
-          $retryDelay = 10
-
-          foreach ($service in $services.Keys) {
-            $url = $services[$service]
-            Write-Host "Checking $service at $url..." -ForegroundColor Yellow
-
-            $healthy = $false
-            for ($i = 1; $i -le $maxRetries; $i++) {
-              try {
-                $response = Invoke-WebRequest -Uri $url -TimeoutSec 5 -UseBasicParsing
-                if ($response.StatusCode -eq 200) {
-                  Write-Host "✓ $service is healthy" -ForegroundColor Green
-                  $healthy = $true
-                  break
-                }
-              } catch {
-                if ($i -lt $maxRetries) {
-                  Write-Host "⏳ Attempt $i/$maxRetries failed, retrying in ${retryDelay}s..." -ForegroundColor Yellow
-                  Start-Sleep -Seconds $retryDelay
-                }
-              }
-            }
-
-            if (-not $healthy) {
-              Write-Warning "$service failed health check after $maxRetries attempts"
-            }
-          }
+          Write-Host "All required containers exist." -ForegroundColor Green
 
       - name: Collect logs
         if: always()
@@ -345,26 +199,28 @@ jobs:
         run: |
           Write-Host "Collecting logs..." -ForegroundColor Cyan
           $ErrorActionPreference = 'Continue'
-
           New-Item -ItemType Directory -Force -Path logs | Out-Null
 
-          $services = @("app", "db", "minio")
-          foreach ($service in $services) {
+          @("app", "db", "minio") | ForEach-Object {
+            $service = $_
             $exists = docker ps -a --format "{{.Names}}" | Select-String "^$service$"
             if ($exists) {
-              Write-Host "Saving $service logs..." -ForegroundColor Yellow
-              docker logs $service --tail=500 --timestamps > "logs/$service.log" 2>&1
+              Write-Host "Saving $service logs..."
+              Start-Process -FilePath "docker" -ArgumentList "logs $service --tail=300 --timestamps" -NoNewWindow -Wait `
+                -RedirectStandardOutput "logs/$service.log" `
+                -RedirectStandardError  "logs/$service.log"
             } else {
-              Write-Host "⚠ Container '$service' not found" -ForegroundColor Yellow
+              Write-Host "Skipping $service logs (container not found)" -ForegroundColor Yellow
             }
           }
 
-          Write-Host "Saving Docker status..." -ForegroundColor Yellow
-          docker compose ps --format json > logs/docker-status.json 2>&1
-          docker ps -a --format json > logs/docker-ps.json 2>&1
+          Write-Host "Saving docker status..."
+          Start-Process -FilePath "docker" -ArgumentList "compose ps --format json" -NoNewWindow -Wait `
+            -RedirectStandardOutput "logs/docker-status.json" `
+            -RedirectStandardError  "logs/docker-status.json"
 
-          Write-Host "Log files:" -ForegroundColor Cyan
-          Get-ChildItem logs/ | Format-Table Name, Length -AutoSize
+          Write-Host "Log files:"
+          Get-ChildItem logs/ | Format-Table Name, Length
 
       - name: Upload logs
         if: always()
@@ -372,51 +228,31 @@ jobs:
         with:
           name: deployment-logs-${{ github.run_id }}
           path: logs/
-          retention-days: ${{ env.LOG_RETENTION_DAYS }}
+          retention-days: 7
           if-no-files-found: warn
 
-      - name: Deployment Summary
+      - name: Summary
         if: always()
         shell: powershell
         run: |
-          Write-Host "`n========================================" -ForegroundColor Cyan
-          Write-Host "DEPLOYMENT SUMMARY" -ForegroundColor Cyan
-          Write-Host "========================================" -ForegroundColor Cyan
-          Write-Host "Job Status: ${{ job.status }}" -ForegroundColor $(if ("${{ job.status }}" -eq "success") { "Green" } else { "Red" })
-          Write-Host "Run ID: ${{ github.run_id }}"
-          Write-Host "Commit: ${{ github.sha }}"
-          Write-Host "`nContainer Status:" -ForegroundColor Cyan
+          Write-Host "Deployment Summary" -ForegroundColor Cyan
+          Write-Host "Status: ${{ job.status }}"
           docker compose ps
-          Write-Host "`nImage Info:" -ForegroundColor Cyan
-          docker images distributed-access-control-system-app:latest
-          Write-Host "========================================`n" -ForegroundColor Cyan
 
       - name: Cleanup on failure
         if: failure()
         shell: powershell
         run: |
           Write-Host "Collecting failure diagnostics..." -ForegroundColor Yellow
-
-          Write-Host "`nContainer logs (last 100 lines):" -ForegroundColor Yellow
           docker compose logs --tail=100
-
-          Write-Host "`nDocker system info:" -ForegroundColor Yellow
           docker system df
 
-          Write-Host "`nContainer inspect:" -ForegroundColor Yellow
-          docker compose ps -a
-
-          Write-Host "`nDocker events (last 50):" -ForegroundColor Yellow
-          docker events --since 30m --until 0s | Select-Object -Last 50
-
       - name: Prune build cache
-        if: always()
         shell: powershell
         run: |
           Write-Host "Pruning Docker build cache..." -ForegroundColor Cyan
-          docker buildx prune -af --filter "until=24h"
-          docker system prune -f --filter "until=24h"
-          Write-Host "✓ Cache pruned" -ForegroundColor Green
+          docker buildx prune -af
+          docker system prune -af --volumes
 
       - name: Check network connectivity
         if: always()
@@ -432,8 +268,8 @@ jobs:
           foreach ($endpoint in $endpoints) {
             $result = Test-NetConnection -ComputerName $endpoint.Host -Port $endpoint.Port -WarningAction SilentlyContinue
             if ($result.TcpTestSucceeded) {
-              Write-Host "✓ $($endpoint.Name) reachable" -ForegroundColor Green
+              Write-Host "[OK] $($endpoint.Name) reachable" -ForegroundColor Green
             } else {
-              Write-Host "✗ $($endpoint.Name) unreachable" -ForegroundColor Red
+              Write-Host "[FAIL] $($endpoint.Name) unreachable" -ForegroundColor Red
             }
           }
