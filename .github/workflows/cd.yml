@@ -231,14 +231,23 @@ jobs:
           $ErrorActionPreference = 'Continue'
           New-Item -ItemType Directory -Force -Path logs | Out-Null
 
-          $services = @("app", "db", "minio")
-          foreach ($service in $services) {
-            $exists = docker ps -a --format "{{.Names}}" | Select-String "^$service$"
+          # Resolve real container names from compose
+          $psJson = docker compose ps --format json
+          $containers = $psJson | ConvertFrom-Json
+          if ($containers -isnot [array]) { $containers = @($containers) }
+          $nameByService = @{}
+          foreach ($c in $containers) { $nameByService[$c.Service] = $c.Name }
+
+          $services = @("app","db","minio")
+          foreach ($svc in $services) {
+            $name = $nameByService[$svc]
+            if (-not $name) { $name = $svc } # fallback
+            $exists = docker ps -a --format "{{.Names}}" | Select-String "^$name$"
             if ($exists) {
-              Write-Host "Saving $service logs..."
-              docker logs $service --tail=1000 --timestamps *> ("logs/{0}.log" -f $service)
+              Write-Host "Saving $svc logs..."
+              docker logs $name --tail=2000 --timestamps *> ("logs/{0}.log" -f $svc)
             } else {
-              Write-Host "Skipping $service logs (container not found)" -ForegroundColor Yellow
+              Write-Host "Skipping $svc logs (container not found: $name)" -ForegroundColor Yellow
             }
           }
 
@@ -251,12 +260,13 @@ jobs:
           Get-ChildItem logs/ | Format-Table Name, Length
 
       - name: Upload logs
-        if: always()
+        if: ${{ always() && !cancelled() }}
         uses: actions/upload-artifact@v4
+        continue-on-error: true
         with:
           name: deployment-logs-${{ github.run_id }}
           path: logs/
-          retention-days: 7
+          retention-days: ${{ env.LOG_RETENTION_DAYS }}
           if-no-files-found: warn
 
       - name: Summary
