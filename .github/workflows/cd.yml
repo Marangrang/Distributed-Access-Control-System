@@ -201,23 +201,21 @@ jobs:
           $ErrorActionPreference = 'Continue'
           New-Item -ItemType Directory -Force -Path logs | Out-Null
 
-          @("app", "db", "minio") | ForEach-Object {
-            $service = $_
+          $services = @("app", "db", "minio")
+          foreach ($service in $services) {
             $exists = docker ps -a --format "{{.Names}}" | Select-String "^$service$"
             if ($exists) {
               Write-Host "Saving $service logs..."
-              Start-Process -FilePath "docker" -ArgumentList "logs $service --tail=300 --timestamps" -NoNewWindow -Wait `
-                -RedirectStandardOutput "logs/$service.log" `
-                -RedirectStandardError  "logs/$service.log"
+              docker logs $service --tail=1000 --timestamps 2>&1 | Out-File -FilePath ("logs/{0}.log" -f $service) -Encoding utf8
             } else {
               Write-Host "Skipping $service logs (container not found)" -ForegroundColor Yellow
             }
           }
 
           Write-Host "Saving docker status..."
-          Start-Process -FilePath "docker" -ArgumentList "compose ps --format json" -NoNewWindow -Wait `
-            -RedirectStandardOutput "logs/docker-status.json" `
-            -RedirectStandardError  "logs/docker-status.json"
+          docker compose ps --format json 2>&1 | Out-File -FilePath "logs/docker-status.json" -Encoding utf8
+          docker ps -a --format json 2>&1 | Out-File -FilePath "logs/docker-ps.json" -Encoding utf8
+          docker system df 2>&1 | Out-File -FilePath "logs/docker-df.txt" -Encoding utf8
 
           Write-Host "Log files:"
           Get-ChildItem logs/ | Format-Table Name, Length
