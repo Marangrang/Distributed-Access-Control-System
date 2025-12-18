@@ -193,6 +193,36 @@ jobs:
           }
           Write-Host "All required containers exist." -ForegroundColor Green
 
+      - name: Wait for app health
+        shell: powershell
+        timeout-minutes: 15
+        continue-on-error: true
+        run: |
+          Write-Host "Waiting for app to become healthy..." -ForegroundColor Cyan
+          $maxRetries = 30
+          $retryDelay = 10
+          $healthy = $false
+
+          for ($i = 1; $i -le $maxRetries; $i++) {
+            try {
+              $response = Invoke-WebRequest -Uri "http://localhost:8000/health" -TimeoutSec 5 -UseBasicParsing
+              if ($response.StatusCode -eq 200) {
+                Write-Host "[OK] App is healthy" -ForegroundColor Green
+                $healthy = $true
+                break
+              }
+            } catch {
+              if ($i -lt $maxRetries) {
+                Write-Host "Attempt $i/$maxRetries: App not ready, retrying in ${retryDelay}s..." -ForegroundColor Yellow
+                Start-Sleep -Seconds $retryDelay
+              }
+            }
+          }
+
+          if (-not $healthy) {
+            Write-Warning "App health check did not pass after $maxRetries attempts"
+          }
+
       - name: Collect logs
         if: always()
         shell: powershell
