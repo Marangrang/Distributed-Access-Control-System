@@ -206,16 +206,16 @@ jobs:
             $exists = docker ps -a --format "{{.Names}}" | Select-String "^$service$"
             if ($exists) {
               Write-Host "Saving $service logs..."
-              docker logs $service --tail=1000 --timestamps 2>&1 | Out-File -FilePath ("logs/{0}.log" -f $service) -Encoding utf8
+              docker logs $service --tail=1000 --timestamps *> ("logs/{0}.log" -f $service)
             } else {
               Write-Host "Skipping $service logs (container not found)" -ForegroundColor Yellow
             }
           }
 
           Write-Host "Saving docker status..."
-          docker compose ps --format json 2>&1 | Out-File -FilePath "logs/docker-status.json" -Encoding utf8
-          docker ps -a --format json 2>&1 | Out-File -FilePath "logs/docker-ps.json" -Encoding utf8
-          docker system df 2>&1 | Out-File -FilePath "logs/docker-df.txt" -Encoding utf8
+          docker compose ps --format json > "logs/docker-status.json"
+          docker ps -a --format json > "logs/docker-ps.json"
+          docker system df *> "logs/docker-df.txt"
 
           Write-Host "Log files:"
           Get-ChildItem logs/ | Format-Table Name, Length
