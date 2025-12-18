@@ -213,7 +213,7 @@ jobs:
               }
             } catch {
               if ($i -lt $maxRetries) {
-                Write-Host "Attempt $i/$maxRetries: App not ready, retrying in ${retryDelay}s..." -ForegroundColor Yellow
+                Write-Host "Attempt $i/$maxRetries: App not ready, retrying in $($retryDelay)s..." -ForegroundColor Yellow
                 Start-Sleep -Seconds $retryDelay
               }
             }
