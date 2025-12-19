@@ -267,7 +267,7 @@ jobs:
 
       - name: Upload logs
         if: ${{ always() && !cancelled() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         continue-on-error: true
         with:
           name: deployment-logs-${{ github.run_id }}
