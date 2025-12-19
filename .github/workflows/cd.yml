@@ -21,7 +21,7 @@ env:
 jobs:
   build-and-deploy:
     runs-on: self-hosted
-    timeout-minutes: 120
+    timeout-minutes: 240
 
     steps:
       - name: Checkout code
@@ -42,9 +42,9 @@ jobs:
           $missingFiles = @()
           foreach ($file in $requiredFiles) {
             if (Test-Path $file) {
-              Write-Host "OK $file" -ForegroundColor Green
+              Write-Host "[OK] $file" -ForegroundColor Green
             } else {
-              Write-Host "MISSING $file" -ForegroundColor Red
+              Write-Host "[MISSING] $file" -ForegroundColor Red
               $missingFiles += $file
             }
           }
@@ -65,7 +65,7 @@ jobs:
           while ($retryCount -lt $maxRetries) {
             docker ps 2>&1 | Out-Null
             if ($LASTEXITCODE -eq 0) {
-              Write-Host "Docker daemon ready" -ForegroundColor Green
+              Write-Host "[OK] Docker daemon ready" -ForegroundColor Green
               break
             }
             $retryCount++
@@ -76,9 +76,9 @@ jobs:
             Start-Sleep -Seconds 3
           }
 
-          Write-Host "Docker version:"
+          Write-Host "Docker version:" -ForegroundColor Cyan
           docker --version
-          Write-Host "Compose version:"
+          Write-Host "Compose version:" -ForegroundColor Cyan
           docker compose version
 
       - name: Cleanup old resources
@@ -97,7 +97,7 @@ jobs:
           # Remove stopped containers
           docker container prune -f 2>&1 | Out-Null
 
-          Write-Host "✓ Cleanup complete" -ForegroundColor Green
+          Write-Host "[OK] Cleanup complete" -ForegroundColor Green
 
       - name: Free disk space
         shell: powershell
@@ -132,7 +132,7 @@ jobs:
           if ($null -eq $images) {
             throw "App image not found; build or pull must succeed before starting services."
           }
-          Write-Host "Image found: $images" -ForegroundColor Green
+          Write-Host "[OK] Image verified: $images" -ForegroundColor Green
 
       - name: Pre-pull base images
         shell: powershell
@@ -186,12 +186,18 @@ jobs:
           if ($containers -isnot [array]) { $containers = @($containers) }
 
           $required = @("app","db","minio")
+          $allExist = $true
           foreach ($svc in $required) {
-            if (-not ($containers | Where-Object { $_.Service -eq $svc })) {
-              throw "Container '$svc' was not created"
+            if ($containers | Where-Object { $_.Service -eq $svc }) {
+              Write-Host "[OK] Container '$svc' exists" -ForegroundColor Green
+            } else {
+              Write-Host "[FAIL] Container '$svc' not found" -ForegroundColor Red
+              $allExist = $false
             }
           }
-          Write-Host "All required containers exist." -ForegroundColor Green
+
+          if (-not $allExist) { throw "Some required containers are missing" }
+          Write-Host "[OK] All required containers exist" -ForegroundColor Green
 
       - name: Wait for app health
         shell: powershell
@@ -213,14 +219,14 @@ jobs:
               }
             } catch {
               if ($i -lt $maxRetries) {
-                Write-Host "Attempt $i/$maxRetries: App not ready, retrying in $($retryDelay)s..." -ForegroundColor Yellow
+                Write-Host ("Attempt {0}/{1}: App not ready, retrying in {2}s..." -f $i, $maxRetries, $retryDelay) -ForegroundColor Yellow
                 Start-Sleep -Seconds $retryDelay
               }
             }
           }
 
           if (-not $healthy) {
-            Write-Warning "App health check did not pass after $maxRetries attempts"
+            Write-Warning "[WARN] App health check did not pass after $maxRetries attempts"
           }
 
       - name: Collect logs
@@ -273,8 +279,11 @@ jobs:
         if: always()
         shell: powershell
         run: |
-          Write-Host "Deployment Summary" -ForegroundColor Cyan
-          Write-Host "Status: ${{ job.status }}"
+          Write-Host "`n========================================" -ForegroundColor Cyan
+          Write-Host "DEPLOYMENT SUMMARY" -ForegroundColor Cyan
+          Write-Host "========================================" -ForegroundColor Cyan
+          Write-Host "Status: ${{ job.status }}" -ForegroundColor $(if ("${{ job.status }}" -eq "success") { "Green" } else { "Red" })
+          Write-Host "========================================`n" -ForegroundColor Cyan
           docker compose ps
 
       - name: Cleanup on failure
