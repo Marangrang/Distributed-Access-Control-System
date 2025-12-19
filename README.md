@@ -23,7 +23,7 @@ A modular, distributed face verification system for edge-cloud environments, des
 ---
 
 ## Overview
-This system enables fast, local face verification for up to 80,000 drivers, each with three reference photos. The cloud stores originals and embeddings; each site keeps the minimal artifacts needed for fast matching and guard review.
+This system enables fast, local face verification for 256 drivers, each with seven reference photos (Five for training and two for test). The cloud stores originals and embeddings; each site keeps the minimal artifacts needed for fast matching and guard review.
 
 ## Features
 - Cloud ingestion of images and embeddings
