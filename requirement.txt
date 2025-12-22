@@ -1,6 +1,6 @@
 ## Core ML/DL Packages
 torch==2.5.1
-numpy==1.26.4
+numpy==2.3.5
 torchvision==0.20.1
 facenet-pytorch==2.5.3
 faiss-cpu==1.13.0
