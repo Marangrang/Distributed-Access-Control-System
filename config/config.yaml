@@ -6,37 +6,118 @@ db:
   user: myuser
   password: mypassword
 
-minio:
-  endpoint: http://minio:9000
-  access_key: minioadmin
-  secret_key: minioadmin
-  region: us-east-1
-
-model:
-  embedding_dim: 512
-  similarity_threshold: 0.7
-  backbone: inception_resnet_v1
-  pretrained_source: vggface2
-
-paths:
-  faiss_index: /app/verification_service/faiss_index
-  models: /app/models
-  originals: data/originals
-  thumbnails: verification_service/faiss_index/thumbs
-  embeddings_index: verification_service/faiss_index/driver_vectors.index
-  metadata: verification_service/faiss_index/metadata.json
-
-cloud:
-  minio_endpoint: http://minio:9000
-  pgvector_host: db
-  pgvector_port: 5432
-  pgvector_db: mydb
-  pgvector_user: myuser
-  pgvector_password: mypassword
-
-sync:
-  interval_minutes: 10
-  checkpoint_file: sync_checkpoint.txt
+# Application Configuration
+# Use environment variables for sensitive data
 
 app:
+  name: "Distributed Access Control System"
+  version: "1.0.0"
+  environment: "${APP_ENV:development}" # development, staging, production
+  debug: "${DEBUG:false}"
   uvicorn_workers: 2
+
+# MinIO Object Storage
+minio:
+  endpoint: "${MINIO_ENDPOINT:localhost:9000}"
+  access_key: "${MINIO_ACCESS_KEY}" # Required from env
+  secret_key: "${MINIO_SECRET_KEY}" # Required from env
+  secure: "${MINIO_SECURE:false}"
+  region: "${MINIO_REGION:us-east-1}"
+
+  buckets:
+    faces: "${BUCKET_FACE_IMAGES:face-images}"
+    models: "${BUCKET_MODELS:trained-models}"
+    logs: "${BUCKET_LOGS:access-logs}"
+
+# Face Recognition Model
+model:
+  pretrained: "vggface2" # or "casia-webface"
+  device: "${MODEL_DEVICE:auto}" # auto, cuda, cpu
+  similarity_threshold: "${SIMILARITY_THRESHOLD:0.6}"
+
+  faiss:
+    index_type: "IndexFlatL2" # L2 distance
+    local_cache_dir: "verification_service/faiss_index"
+    sync_interval_seconds: 300 # 5 minutes
+
+  mtcnn:
+    image_size: 160
+    margin: 0
+    min_face_size: 20
+    thresholds: [0.6, 0.7, 0.7]
+    factor: 0.709
+    keep_all: false
+
+# Training Configuration
+training:
+  batch_size: 32
+  image_size: 160
+  max_images_per_person: 100
+  min_images_per_person: 5
+  test_split: 0.2
+  random_seed: 42
+
+  output:
+    save_to_minio: true
+    versioning: true
+    keep_local_copy: false
+
+# API Server
+api:
+  host: "${API_HOST:0.0.0.0}"
+  port: "${API_PORT:8080}"
+  workers: "${API_WORKERS:4}"
+  timeout: 60
+  keepalive: 5
+  max_requests: 1000
+  max_requests_jitter: 50
+
+# Verification Service
+verification:
+  max_concurrent_requests: 10
+  request_timeout_seconds: 30
+  enable_metrics: true
+  enable_cors: true
+  cors_origins:
+    - "http://localhost:3000"
+    - "http://localhost:8080"
+
+# Logging
+logging:
+  level: "${LOG_LEVEL:INFO}" # DEBUG, INFO, WARNING, ERROR
+  format: "json" # json or text
+  output:
+    console: true
+    file: true
+    file_path: "logs/app.log"
+    max_bytes: 10485760 # 10MB
+    backup_count: 5
+
+# Monitoring
+monitoring:
+  prometheus:
+    enabled: true
+    port: 9090
+    path: "/metrics"
+
+  health_check:
+    enabled: true
+    interval_seconds: 30
+    timeout_seconds: 5
+
+# Security
+security:
+  enable_auth: "${ENABLE_AUTH:false}"
+  jwt_secret: "${JWT_SECRET}"
+  jwt_expiry_hours: 24
+  max_login_attempts: 5
+  lockout_duration_minutes: 15
+
+# Performance
+performance:
+  cache_enabled: true
+  cache_ttl_seconds: 300
+  compression_enabled: true
+  rate_limiting:
+    enabled: true
+    requests_per_minute: 60

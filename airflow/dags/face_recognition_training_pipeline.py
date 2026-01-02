@@ -71,23 +71,20 @@ def get_db_connection() -> Dict[str, str]:
         raise
 
 
-def get_minio_connection() -> Dict[str, str]:
-    """
-    Retrieve MinIO connection from Airflow connections.
-
-    Returns:
-        Dict containing MinIO connection parameters
-    """
-    try:
-        conn = BaseHook.get_connection('minio_default')
-        return {
-            'endpoint': conn.host,
-            'access_key': conn.login,
-            'secret_key': conn.password,
-        }
-    except Exception as e:
-        logger.error(f"Failed to get MinIO connection: {str(e)}")
-        raise
+def get_minio_connection() -> Dict[str, Any]:
+    """Retrieve MinIO connection from Airflow connections with secure flag support."""
+    conn = BaseHook.get_connection('minio_default')
+    extra = conn.extra_dejson if hasattr(conn, 'extra_dejson') else {}
+    # Allow port override on connection
+    endpoint = conn.host
+    if conn.port:
+        endpoint = f"{endpoint}:{conn.port}"
+    return {
+        'endpoint': endpoint,
+        'access_key': conn.login,
+        'secret_key': conn.password,
+        'secure': extra.get('secure', False),
+    }
 
 
 with DAG(
@@ -119,12 +116,13 @@ with DAG(
                 minio_conn['endpoint'],
                 access_key=minio_conn['access_key'],
                 secret_key=minio_conn['secret_key'],
-                secure=False
+                secure=minio_conn.get('secure', False),
             )
 
             # Check for new images in training bucket
-            bucket_name = "{{ var.value.get('training_bucket', 'training-data') }}"
-            objects = list(client.list_objects(bucket_name, recursive=True))
+            bucket_name = "{{ var.value.get('source_bucket', 'face-images') }}"
+            prefix = "train/"
+            objects = list(client.list_objects(bucket_name, prefix=prefix, recursive=True))
 
             if len(objects) > 0:
                 logger.info(f"✓ Found {len(objects)} training images")
@@ -150,7 +148,7 @@ with DAG(
         try:
             import sys
             sys.path.append('/opt/airflow/train')
-            from train import train_face_recognition_model
+            from train import main as train_main
 
             # Get training data count from previous task
             data_count = context['ti'].xcom_pull(
@@ -160,16 +158,20 @@ with DAG(
 
             logger.info(f"Starting model training with {data_count} images...")
 
-            # Train model (function should return metrics)
-            metrics = train_face_recognition_model()
+            # Run training pipeline (uploads artifacts to MinIO)
+            try:
+                train_main()
+            except SystemExit as se:
+                # train.main calls sys.exit on failure; re-raise for Airflow
+                raise RuntimeError(f"Training failed with exit code {se.code}") from se
 
-            logger.info(f"✓ Model training completed: {metrics}")
+            logger.info("✓ Model training completed")
 
             return {
                 'status': 'success',
                 'images_processed': data_count,
-                'accuracy': metrics.get('accuracy', 'N/A'),
-                'training_time': metrics.get('training_time', 'N/A'),
+                'accuracy': 'see training_info.json',
+                'training_time': 'see training_info.json',
             }
 
         except Exception as e:
@@ -187,15 +189,17 @@ with DAG(
         try:
             import sys
             sys.path.append('/opt/airflow/verification_service')
-            from build_index import build_faiss_index as build_index
+            from build_index import build_index_from_embeddings, INDEX_PATH
 
-            logger.info("Building FAISS index...")
+            logger.info("Building FAISS index from embeddings...")
 
-            index_path = build_index()
+            success = build_index_from_embeddings(verify_only=False)
+            if not success:
+                raise RuntimeError("FAISS index build failed")
 
-            logger.info(f"✓ FAISS index built: {index_path}")
+            logger.info(f"✓ FAISS index built: {INDEX_PATH}")
 
-            return index_path
+            return str(INDEX_PATH)
 
         except Exception as e:
             logger.error(f"FAISS index build failed: {str(e)}")
@@ -213,17 +217,51 @@ with DAG(
             bool: True if upload successful
         """
         try:
-            import sys
-            sys.path.append('/opt/airflow/train')
-            from upload_index_to_minio import upload_index_to_minio
+            from minio import Minio
+            from pathlib import Path
 
-            logger.info(f"Uploading artifacts from {index_path} to MinIO...")
+            minio_conn = get_minio_connection()
 
-            # Upload using connection (not hardcoded credentials)
-            upload_index_to_minio(index_path)
+            client = Minio(
+                minio_conn['endpoint'],
+                access_key=minio_conn['access_key'],
+                secret_key=minio_conn['secret_key'],
+                secure=minio_conn.get('secure', False)
+            )
+
+            model_bucket = "{{ var.value.get('model_bucket', 'trained-models') }}"
+
+            # Ensure bucket exists
+            if not client.bucket_exists(model_bucket):
+                client.make_bucket(model_bucket)
+
+            # Upload files from index directory
+            from datetime import datetime
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            index_dir = Path(index_path).parent
+
+            files_to_upload = [
+                'driver_vectors.npy',
+                'driver_vectors.index',
+                'metadata.json',
+                'label_map.json',
+                'training_info.json'
+            ]
+
+            for filename in files_to_upload:
+                file_path = index_dir / filename
+                if file_path.exists():
+                    # Upload to both timestamped and latest paths
+                    for prefix in [f"models/{timestamp}/", "models/latest/"]:
+                        object_name = f"{prefix}{filename}"
+                        client.fput_object(
+                            model_bucket,
+                            object_name,
+                            str(file_path)
+                        )
+                        logger.info(f"✓ Uploaded {object_name}")
 
             logger.info("✓ Artifacts uploaded successfully")
-
             return True
 
         except Exception as e:
@@ -351,53 +389,3 @@ with DAG(
 
     validation_result = validate_deployment()
     wait_for_health >> validation_result >> send_notification(validation_result)
-
-    """Face Recognition Training Pipeline."""
-    from datetime import datetime, timedelta
-    import logging
-    from typing import Dict
-    from airflow import DAG
-    from airflow.operators.python import PythonOperator
-    from airflow.providers.common.sql.operators.sql import SQLExecuteQueryOperator
-
-    logger = logging.getLogger(__name__)
-
-    default_args = {
-        'owner': 'airflow',
-        'depends_on_past': False,
-        'start_date': datetime(2024, 1, 1),
-        'email_on_failure': False,
-        'email_on_retry': False,
-        'retries': 1,
-        'retry_delay': timedelta(minutes=5),
-    }
-
-    dag = DAG(
-        'face_recognition_training_pipeline',
-        default_args=default_args,
-        description='Train face recognition model',
-        schedule_interval='@weekly',
-        catchup=False,
-    )
-
-    def get_db_connection() -> Dict[str, str]:
-        """Get database connection details."""
-        return {
-            'host': 'localhost',
-            'database': 'face_recognition',
-            'user': 'airflow',
-            'password': 'airflow'
-        }
-
-    def train_model(**kwargs):
-        """Train the face recognition model."""
-        logger.info("Starting model training")
-        db_config = get_db_connection()
-        # Implementation here
-        pass
-
-    train_task = PythonOperator(
-        task_id='train_model',
-        python_callable=train_model,
-        dag=dag,
-    )

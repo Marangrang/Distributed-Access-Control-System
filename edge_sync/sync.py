@@ -1,134 +1,125 @@
-# sync.py: Delta syncs updated embeddings and thumbnails from cloud to
-# edge device
-import requests
+"""
+Model sync module - Download updated models from MinIO
+"""
 import os
-import time
 import logging
-from botocore.client import Config
-import boto3
-from verification_service import metrics
+from pathlib import Path
+from datetime import datetime
+from minio import Minio
+from minio.error import S3Error
+from metrics import set_sync_lag
 
 logger = logging.getLogger(__name__)
 
-MINIO_ENDPOINT = os.getenv("MINIO_ENDPOINT", "http://minio:9000")
-MINIO_ACCESS_KEY = os.getenv("MINIO_ACCESS_KEY", "minioadmin")
-MINIO_SECRET_KEY = os.getenv("MINIO_SECRET_KEY", "minioadmin")
-MINIO_BUCKET = os.getenv("MINIO_BUCKET", "faiss-index")
-LOCAL_INDEX_DIR = os.getenv(
-    "LOCAL_INDEX_DIR",
-    "verification_service/faiss_index")
-LOCAL_INDEX_PATH = os.path.join(LOCAL_INDEX_DIR, "driver_vectors.index")
-LOCAL_METADATA_PATH = os.path.join(LOCAL_INDEX_DIR, "metadata.json")
-THUMBS_LOCAL_DIR = os.path.join(LOCAL_INDEX_DIR, "thumbs")
+MINIO_ENDPOINT = os.getenv('MINIO_ENDPOINT', 'localhost:9000')
+MINIO_ACCESS_KEY = os.getenv('MINIO_ACCESS_KEY', 'minioadmin')
+MINIO_SECRET_KEY = os.getenv('MINIO_SECRET_KEY', 'minioadmin')
+MINIO_SECURE = os.getenv('MINIO_SECURE', 'false').lower() in ('1','true','yes')
+MODEL_BUCKET = os.getenv('MODEL_BUCKET', 'trained-models')
+LOCAL_MODEL_DIR = Path(os.getenv('LOCAL_MODEL_DIR', '/app/verification_service/faiss_index'))
 
 
-def minio_client():
-    return boto3.client(
-        "s3",
-        endpoint_url='http://minio:9000',
-        aws_access_key_id='minioadmin',
-        aws_secret_access_key='minioadmin',
-        config=Config(signature_version="s3v4"),
-    )
+class ModelSyncManager:
+    """Manage model synchronization from MinIO"""
 
+    def __init__(self,
+                 endpoint: str = MINIO_ENDPOINT,
+                 access_key: str = MINIO_ACCESS_KEY,
+                 secret_key: str = MINIO_SECRET_KEY,
+                 bucket: str = MODEL_BUCKET,
+                 local_model_dir: str | Path = LOCAL_MODEL_DIR,
+                 secure: bool = MINIO_SECURE):
+        self.client = Minio(
+            endpoint,
+            access_key=access_key,
+            secret_key=secret_key,
+            secure=secure,
+        )
+        self.bucket = bucket
+        self.local_model_dir = Path(local_model_dir)
+        self.last_sync = None
+        self.local_model_dir.mkdir(parents=True, exist_ok=True)
 
-def load_checkpoint(path="sync_checkpoint.txt"):
-    if os.path.exists(path):
-        with open(path, "r") as f:
-            return f.read().strip()
-    return "0"
-
-
-def save_checkpoint(ts, path="sync_checkpoint.txt"):
-    with open(path, "w") as f:
-        f.write(str(ts))
-
-
-def download_index_from_minio(bucket=MINIO_BUCKET, prefix=""):
-    client = minio_client()
-    os.makedirs(LOCAL_INDEX_DIR, exist_ok=True)
-    # download index file
-    try:
-        logger.info(
-            "Downloading %s/driver_vectors.index -> %s",
-            bucket,
-            LOCAL_INDEX_PATH)
-        client.download_file(bucket, "driver_vectors.index", LOCAL_INDEX_PATH)
-    except Exception as e:
-        logger.exception("Failed to download driver_vectors.index: %s", e)
-        raise
-
-    # download metadata.json
-    try:
-        logger.info(
-            "Downloading %s/metadata.json -> %s",
-            bucket,
-            LOCAL_METADATA_PATH)
-        client.download_file(bucket, "metadata.json", LOCAL_METADATA_PATH)
-    except Exception as e:
-        logger.warning("metadata.json not found in bucket: %s", e)
-
-    # download thumbs/ prefix
-    os.makedirs(THUMBS_LOCAL_DIR, exist_ok=True)
-    paginator = client.get_paginator("list_objects_v2")
-    for page in paginator.paginate(Bucket=bucket, Prefix="thumbs/"):
-        for obj in page.get("Contents", []):
-            key = obj["Key"]
-            # skip folder keys
-            if key.endswith("/"):
-                continue
-            local_path = os.path.join(LOCAL_INDEX_DIR, key)
-            local_dir = os.path.dirname(local_path)
-            os.makedirs(local_dir, exist_ok=True)
-            logger.info("Downloading %s -> %s", key, local_path)
-            client.download_file(bucket, key, local_path)
-
-
-# Example sync loop: call download_index_from_minio when a new version is
-# available
-def sync_loop(poll_interval_seconds=60 * 10):
-    while True:
+    def get_remote_model_timestamp(self) -> datetime:
+        """Get last modified time of remote model"""
         try:
-            download_index_from_minio()
-            # update your checkpoint / notify service (e.g., touch a reload
-            # file)
-            logger.info("Index sync complete")
-        except Exception as e:
-            logger.exception("Index sync failed: %s", e)
-        time.sleep(poll_interval_seconds)
+            stat = self.client.stat_object(
+                self.bucket,
+                'models/latest/training_info.json'
+            )
+            return stat.last_modified
+        except S3Error as e:
+            logger.error(f"Failed to get remote timestamp: {e}")
+            return None
+
+    def get_local_model_timestamp(self) -> datetime | None:
+        """Get last modified time of local training_info.json if present"""
+        info_path = self.local_model_dir / 'training_info.json'
+        try:
+            stat = info_path.stat()
+            return datetime.fromtimestamp(stat.st_mtime)
+        except FileNotFoundError:
+            return None
+
+    def download_model_files(self) -> bool:
+        """Download all model files from MinIO"""
+        files_to_download = [
+            'driver_vectors.npy',
+            'driver_vectors.index',
+            'metadata.json',
+            'training_info.json'
+        ]
+
+        success_count = 0
+        for filename in files_to_download:
+            object_name = f"models/latest/{filename}"
+            local_file = self.local_model_dir / filename
+            tmp_file = local_file.with_suffix(local_file.suffix + '.tmp')
+
+            try:
+                # Download to a temporary file, then atomically replace
+                self.client.fget_object(self.bucket, object_name, str(tmp_file))
+                os.replace(tmp_file, local_file)
+                logger.info(f"✓ Downloaded {filename}")
+                success_count += 1
+            except S3Error as e:
+                logger.error(f"Failed to download {filename}: {e}")
+            except Exception as e:
+                logger.error(f"Failed to finalize {filename}: {e}")
+
+        if success_count == len(files_to_download):
+            self.last_sync = datetime.now()
+            set_sync_lag(0)
+            return True
+        return False
+
+    def check_for_updates(self) -> bool:
+        """Check if remote model is newer than local"""
+        # Compare remote timestamp to local file timestamp
+        remote_time = self.get_remote_model_timestamp()
+        if not remote_time:
+            return False
+        local_time = self.get_local_model_timestamp() or self.last_sync
+        if not local_time:
+            return True
+        return remote_time > local_time
+
+    def sync_if_needed(self) -> bool:
+        """Sync model if updates available"""
+        if self.check_for_updates():
+            logger.info("New model version detected, syncing...")
+            return self.download_model_files()
+        else:
+            logger.info("Model is up to date")
+            # Update sync lag
+            if self.last_sync:
+                lag = (datetime.now() - self.last_sync).total_seconds()
+                set_sync_lag(lag)
+            return True
 
 
-def sync_vectors(api_url="https://your-api.com/vectors",
-                 thumb_url="https://your-api.com/thumbs"):
-    last_sync = load_checkpoint()
-    # Simulate delta fetch: only get items updated since last_sync
-    response = requests.get(api_url, params={"since": last_sync})
-    if response.status_code == 200:
-        data = response.json()
-        # Upsert embeddings
-        with open("verification_service/faiss_index/driver_vectors.index", "wb") as f:
-            f.write(bytes(data["binary_index"]))  # Simulated upsert
-        # Upsert thumbnails
-        for thumb in data.get("thumbnails", []):
-            thumb_resp = requests.get(f"{thumb_url}/{thumb['driver_id']}.jpg")
-            if thumb_resp.status_code == 200:
-                # FIX: Break long string across multiple lines
-                thumb_path = (
-                    f"verification_service/faiss_index/thumbs/"
-                    f"{thumb['driver_id']}.jpg"
-                )
-                with open(thumb_path, "wb") as tf:
-                    tf.write(thumb_resp.content)
-        # Save new checkpoint
-        save_checkpoint(data["latest_ts"])
-        # Set Prometheus sync lag (assume latest_ts is a unix timestamp)
-        now = int(time.time())
-        lag = now - int(data["latest_ts"])
-        metrics.set_sync_lag(lag)
-        print("Delta sync complete. Upserts applied.")
-    else:
-        print("Failed to sync:", response.text)
-
-
-if __name__ == "__main__":
-    sync_vectors()
+# For backward compatibility
+def download_index_from_minio():
+    """Legacy function - downloads model from MinIO"""
+    sync_manager = ModelSyncManager()
+    return sync_manager.download_model_files()

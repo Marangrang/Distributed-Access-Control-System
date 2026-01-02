@@ -17,7 +17,7 @@ def test_faiss_index_creation(sample_embeddings):
 
     # Create FAISS index directly (not using build_index function)
     dim = sample_embeddings.shape[1]
-    index = faiss.IndexFlatIP(dim)
+    index = faiss.IndexFlatL2(dim)
     index.add(sample_embeddings)
 
     assert index is not None
@@ -106,8 +106,8 @@ def test_index_search_functionality():
     norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
     embeddings = embeddings / norms
 
-    # Build index
-    index = faiss.IndexFlatIP(dim)
+    # Build index (L2 with normalized vectors)
+    index = faiss.IndexFlatL2(dim)
     index.add(embeddings)
 
     # Search for nearest neighbor
@@ -117,4 +117,5 @@ def test_index_search_functionality():
 
     # First result should be the query itself
     assert indices[0][0] == 0
-    assert distances[0][0] > 0.99  # Should be very close to 1.0 (cosine similarity)
+    # For L2 on normalized vectors, self-distance should be ~0
+    assert distances[0][0] < 1e-6
