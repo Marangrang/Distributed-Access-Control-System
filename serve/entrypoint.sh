@@ -32,8 +32,12 @@ if [[ "${WAIT_FOR_POSTGRES:-false}" == "true" ]]; then
 fi
 
 # Wait for MinIO
-echo "Waiting for MinIO at ${MINIO_ENDPOINT:-http://minio:9000}..."
-while ! curl -sf "${MINIO_ENDPOINT:-http://minio:9000}/minio/health/live" >/dev/null 2>&1; do
+echo "Waiting for MinIO at minio:9000..."
+MINIO_PROTO="http"
+if [[ "${MINIO_SECURE:-false}" == "true" ]]; then
+  MINIO_PROTO="https"
+fi
+while ! curl -sf "${MINIO_PROTO}://minio:9000/minio/health/live" >/dev/null 2>&1; do
   sleep 2
 done
 echo "MinIO is ready!"
@@ -44,7 +48,7 @@ python - <<'PY'
 import os, glob
 from pathlib import Path
 
-endpoint = os.environ.get('MINIO_ENDPOINT', 'http://minio:9000')
+endpoint = os.environ.get('MINIO_ENDPOINT', 'minio:9000')
 access_key = os.environ.get('MINIO_ACCESS_KEY')
 secret_key = os.environ.get('MINIO_SECRET_KEY')
 bucket = os.environ.get('MODEL_BUCKET') or os.environ.get('MINIO_BUCKET', 'trained-models')

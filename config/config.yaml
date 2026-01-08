@@ -18,7 +18,7 @@ app:
 
 # MinIO Object Storage
 minio:
-  endpoint: "${MINIO_ENDPOINT:localhost:9000}"
+  endpoint: "${MINIO_ENDPOINT:minio:9000}" # Format: host:port (no protocol)
   access_key: "${MINIO_ACCESS_KEY}" # Required from env
   secret_key: "${MINIO_SECRET_KEY}" # Required from env
   secure: "${MINIO_SECURE:false}"

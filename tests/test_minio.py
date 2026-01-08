@@ -14,10 +14,10 @@ def minio_client(request):
         pytest.skip("MinIO tests require --run-integration flag or -m integration")
 
     client = Minio(
-        os.getenv("MINIO_ENDPOINT", "localhost:9000"),
+        os.getenv("MINIO_ENDPOINT", "minio:9000"),
         access_key=os.getenv("MINIO_ACCESS_KEY", "minioadmin"),
         secret_key=os.getenv("MINIO_SECRET_KEY", "minioadmin"),
-        secure=False
+        secure=os.getenv("MINIO_SECURE", "false").lower() in ('1','true','yes')
     )
     return client
 

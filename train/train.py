@@ -367,9 +367,10 @@ def main():
     """Main training pipeline"""
 
     # Configuration from environment variables
-    MINIO_ENDPOINT = os.getenv('MINIO_ENDPOINT', 'localhost:9000')
+    MINIO_ENDPOINT = os.getenv('MINIO_ENDPOINT', 'minio:9000')
     MINIO_ACCESS_KEY = os.getenv('MINIO_ACCESS_KEY', 'minioadmin')
     MINIO_SECRET_KEY = os.getenv('MINIO_SECRET_KEY', 'minioadmin')
+    MINIO_SECURE = os.getenv('MINIO_SECURE', 'false').lower() in ('1','true','yes')
     SOURCE_BUCKET = os.getenv('SOURCE_BUCKET', 'face-images')
     MODEL_BUCKET = os.getenv('MODEL_BUCKET', 'trained-models')
     TRAIN_PREFIX = 'train/'
@@ -399,7 +400,7 @@ def main():
             endpoint=MINIO_ENDPOINT,
             access_key=MINIO_ACCESS_KEY,
             secret_key=MINIO_SECRET_KEY,
-            secure=os.getenv('MINIO_SECURE', 'false').lower() in ('1','true','yes')
+            secure=MINIO_SECURE
         )
 
         train_dataset = minio_loader.download_dataset(

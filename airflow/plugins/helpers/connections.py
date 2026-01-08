@@ -72,7 +72,7 @@ def get_minio_connection(conn_id: str = 'minio_default') -> Dict[str, str]:
     except Exception as e:
         logger.warning(f"Airflow connection '{conn_id}' not found, using environment variables: {str(e)}")
         # Fallback to environment variables
-        endpoint = os.getenv('MINIO_ENDPOINT', 'localhost:9000')
+        endpoint = os.getenv('MINIO_ENDPOINT', 'minio:9000')
         secure = os.getenv('MINIO_SECURE', 'false').lower() in ('1','true','yes')
         return {
             'endpoint': endpoint,

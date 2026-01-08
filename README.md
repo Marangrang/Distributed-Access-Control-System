@@ -118,7 +118,7 @@ These notes collect the new upload/download and sync behavior added to the repo.
 
 Important environment variables
 - Ensure MINIO_ENDPOINT includes the scheme (http:// or https://) — e.g.:
-  - MINIO_ENDPOINT=http://minio:9000
+  - MINIO_ENDPOINT=minio:9000
 - Add these to serve/.env or provide via Docker secrets:
   - MINIO_ENDPOINT
   - MINIO_ACCESS_KEY
@@ -301,32 +301,32 @@ We updated the repo to use an image-first, production-friendly retrieval pipelin
 - Scoring / thresholds
   - Returned scores are cosine similarity (inner-product on normalized vectors). Values near 1.0 indicate very close matches, 0 indicates orthogonal, -1 opposite.
   - Select t  name: CD - Build, Publish and Deploy
-  
+
   on:
     push:
       branches: [ main ]
     workflow_dispatch:
-  
+
   env:
     IMAGE_NAME: ghcr.io/marangrang/distributed-access-control-system:latest
-  
+
   jobs:
     build-and-deploy:
       runs-on: ubuntu-latest
       steps:
         - name: Checkout code
           uses: actions/checkout@v3
-  
+
         - name: Set up Docker Buildx
           uses: docker/setup-buildx-action@v2
-  
+
         - name: Log in to GitHub Container Registry
           uses: docker/login-action@v2
           with:
             registry: ghcr.io
             username: ${{ github.actor }}
             password: ${{ secrets.GITHUB_TOKEN }}
-  
+
         - name: Build and push Docker image
           uses: docker/build-push-action@v4
           with:
@@ -334,13 +334,13 @@ We updated the repo to use an image-first, production-friendly retrieval pipelin
             file: ./serve/Dockerfile
             push: true
             tags: ${{ env.IMAGE_NAME }}
-  
+
         - name: Deploy to server via SSH
           run: |
             mkdir -p ~/.ssh
             echo "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/id_ed25519
             chmod 600 ~/.ssh/id_ed25519
-            
+
             cat >> ~/.ssh/config <<EOF
             Host deployment
               HostName ${{ secrets.DEPLOY_HOST }}
@@ -349,7 +349,7 @@ We updated the repo to use an image-first, production-friendly retrieval pipelin
               IdentityFile ~/.ssh/id_ed25519
               StrictHostKeyChecking accept-new
             EOF
-            
+
             echo "🔗 Testing SSH connection..."
             for i in {1..3}; do
               echo "Connection attempt $i of 3"
@@ -366,15 +366,10 @@ We updated the repo to use an image-first, production-friendly retrieval pipelin
                 fi
               fi
             done
-            
+
             echo "🚀 Deploying application..."
             ssh deployment "cd ~/deploy\ SLI/Distributed-Access-Control-System-master && docker compose pull && docker compose up -d --force-recreate"hresholds empirically on held-out pairs (e.g., TPR/FPR tradeoff). Typical face-verification thresholds vary by model and data quality (run ROC/PR evaluation to pick).
 
 - Notes & next steps
   - If you want to support multi-modal retrieval (text + image), we can add a separate text-embedding pipeline (e.g., BGE or sentence-transformers) and an optional reranker.
   - For large-scale deployment consider HNSW/IVF+PQ plus incremental update tooling (or remote indexing with periodic full index rebuilds).
-
-
-
-
-
