@@ -1,4 +1,4 @@
-FROM python:3.9-slim AS builder
+FROM python:3.14-slim AS builder
 
 WORKDIR /app
 
@@ -16,7 +16,7 @@ RUN pip install --upgrade pip setuptools wheel && \
     grep -v "^torch" requirement.txt > requirements_no_torch.txt && \
     pip install --default-timeout=1200 --retries 5 -r requirements_no_torch.txt
 
-FROM python:3.9-slim
+FROM python:3.14-slim
 
 WORKDIR /app
 
