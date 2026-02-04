@@ -146,8 +146,22 @@ jobs:
           Write-Host "Cleaning up old resources..." -ForegroundColor Cyan
           $ErrorActionPreference = 'SilentlyContinue'
 
-          # Stop and remove containers
+          # Aggressively force-remove containers by name to prevent conflicts
+          $containerNames = @("app", "db", "minio")
+          foreach ($name in $containerNames) {
+            docker rm -f $name 2>&1 | Out-Null
+            Write-Host "Removed container: $name" -ForegroundColor DarkGray
+          }
+
+          # Stop and remove compose resources
           docker compose down --remove-orphans --volumes 2>&1 | Out-Null
+
+          # Remove networks with our project name
+          $networks = docker network ls --filter "name=distributed-access-control-system" --format "{{.Name}}" 2>&1
+          foreach ($net in $networks) {
+            docker network rm $net 2>&1 | Out-Null
+            Write-Host "Removed network: $net" -ForegroundColor DarkGray
+          }
 
           # Remove dangling images
           docker image prune -f --filter "dangling=true" 2>&1 | Out-Null
@@ -219,15 +233,25 @@ jobs:
           DOCKER_CLIENT_TIMEOUT: 300
         run: |
           Write-Host "Starting services..." -ForegroundColor Cyan
-          docker compose down --remove-orphans
+
+          # Force cleanup before starting
+          Write-Host "Force removing any existing containers..." -ForegroundColor Yellow
+          $containerNames = @("app", "db", "minio")
+          foreach ($name in $containerNames) {
+            docker rm -f $name 2>&1 | Out-Null
+          }
+          docker compose down --remove-orphans --volumes 2>&1 | Out-Null
+          Start-Sleep -Seconds 2
 
           $max=5; $ok=$false
           for ($i=1; $i -le $max -and -not $ok; $i++) {
             Write-Host "Compose up attempt $i of $max..." -ForegroundColor Yellow
-            docker compose up -d
+            docker compose up -d 2>&1
             if ($LASTEXITCODE -eq 0) { $ok=$true; break }
-            Write-Host "Attempt $i failed; retrying in 30s..." -ForegroundColor Yellow
-            Start-Sleep -Seconds 60
+            Write-Host "Attempt $i failed. Current containers:" -ForegroundColor Yellow
+            docker ps -a --format "table {{.Names}}\t{{.Status}}" 2>&1
+            Write-Host "Retrying in 30s..." -ForegroundColor Yellow
+            Start-Sleep -Seconds 30
           }
 
           if (-not $ok) { throw "Failed to start services after $max attempts" }
@@ -285,6 +309,198 @@ jobs:
 
           if (-not $healthy) {
             Write-Warning "[WARN] App health check did not pass after $maxRetries attempts"
+          }
+
+      - name: Run Unit & Integration Tests
+        shell: powershell
+        timeout-minutes: 30
+        continue-on-error: true
+        run: |
+          Write-Host "Running unit and integration tests..." -ForegroundColor Cyan
+
+          # Install pytest in the app container
+          docker compose exec -T app pip install pytest pytest-cov pytest-asyncio -q
+
+          # Run tests
+          $testOutput = docker compose exec -T app pytest tests/ -v --tb=short --maxfail=5 2>&1
+          Write-Host $testOutput
+
+          if ($LASTEXITCODE -ne 0) {
+            Write-Warning "[WARN] Some tests failed; continuing for diagnostics"
+          } else {
+            Write-Host "[OK] All tests passed" -ForegroundColor Green
+          }
+
+      - name: Test Face Verification Endpoint
+        shell: powershell
+        timeout-minutes: 15
+        continue-on-error: true
+        run: |
+          Write-Host "Testing /verify endpoint with sample image..." -ForegroundColor Cyan
+
+          # Check if sample image exists
+          $sampleImage = Get-ChildItem -Path "data/test/*" -Include "*.jpg","*.png" -Recurse | Select-Object -First 1
+
+          if ($null -eq $sampleImage) {
+            Write-Warning "[WARN] No sample images found in data/test; skipping endpoint test"
+          } else {
+            Write-Host "Using sample image: $($sampleImage.FullName)" -ForegroundColor Yellow
+
+            try {
+              # Read and encode image to base64
+              $imageBytes = [System.IO.File]::ReadAllBytes($sampleImage.FullName)
+              $imageBase64 = [System.Convert]::ToBase64String($imageBytes)
+
+              # Create payload
+              $payload = @{
+                image_base64 = $imageBase64
+              } | ConvertTo-Json
+
+              # Send request
+              $response = Invoke-WebRequest `
+                -Uri "http://localhost:8000/verify" `
+                -Method POST `
+                -Body $payload `
+                -ContentType "application/json" `
+                -TimeoutSec 30 `
+                -WarningAction SilentlyContinue
+
+              if ($response.StatusCode -eq 200) {
+                $result = $response.Content | ConvertFrom-Json
+                Write-Host "[OK] /verify endpoint responded successfully" -ForegroundColor Green
+                Write-Host "  Verified: $($result.verified)" -ForegroundColor Gray
+                Write-Host "  Similarity: $($result.similarity)" -ForegroundColor Gray
+                Write-Host "  Latency: $($result.latency_ms)ms" -ForegroundColor Gray
+              } else {
+                Write-Warning "[WARN] /verify endpoint returned status $($response.StatusCode)"
+              }
+            } catch {
+              Write-Warning "[WARN] /verify endpoint test failed: $($_.Exception.Message)"
+            }
+          }
+
+      - name: Test API Health & Stats Endpoints
+        shell: powershell
+        timeout-minutes: 10
+        continue-on-error: true
+        run: |
+          Write-Host "Testing API endpoints..." -ForegroundColor Cyan
+
+          $endpoints = @(
+            @{Name="/health"; Method="GET"},
+            @{Name="/stats"; Method="GET"},
+            @{Name="/docs"; Method="GET"},
+            @{Name="/metrics"; Method="GET"}
+          )
+
+          foreach ($endpoint in $endpoints) {
+            try {
+              $response = Invoke-WebRequest `
+                -Uri "http://localhost:8000$($endpoint.Name)" `
+                -Method $endpoint.Method `
+                -TimeoutSec 10 `
+                -WarningAction SilentlyContinue
+
+              if ($response.StatusCode -eq 200) {
+                Write-Host "[OK] $($endpoint.Name)" -ForegroundColor Green
+                if ($endpoint.Name -eq "/health" -or $endpoint.Name -eq "/stats") {
+                  $data = $response.Content | ConvertFrom-Json
+                  Write-Host "     $($data | ConvertTo-Json -Compress)" -ForegroundColor DarkGray
+                }
+              } else {
+                Write-Warning "[WARN] $($endpoint.Name) returned status $($response.StatusCode)"
+              }
+            } catch {
+              Write-Warning "[WARN] $($endpoint.Name) test failed: $($_.Exception.Message)"
+            }
+          }
+
+      - name: Verify Database Connectivity
+        shell: powershell
+        timeout-minutes: 10
+        continue-on-error: true
+        run: |
+          Write-Host "Verifying database connectivity..." -ForegroundColor Cyan
+
+          try {
+            $dbTest = docker compose exec -T db psql -U appuser -d appdb -c "SELECT 1;" 2>&1
+            if ($LASTEXITCODE -eq 0) {
+              Write-Host "[OK] Database is accessible" -ForegroundColor Green
+              Write-Host "     $dbTest" -ForegroundColor DarkGray
+            } else {
+              Write-Warning "[WARN] Database connectivity test failed"
+            }
+          } catch {
+            Write-Warning "[WARN] Database test error: $($_.Exception.Message)"
+          }
+
+      - name: Verify MinIO Connectivity
+        shell: powershell
+        timeout-minutes: 10
+        continue-on-error: true
+        run: |
+          Write-Host "Verifying MinIO connectivity..." -ForegroundColor Cyan
+
+          try {
+            $minioHealth = docker compose exec -T minio curl -s http://localhost:9000/minio/health/live 2>&1
+            if ($LASTEXITCODE -eq 0) {
+              Write-Host "[OK] MinIO is accessible" -ForegroundColor Green
+            } else {
+              Write-Warning "[WARN] MinIO connectivity test failed"
+            }
+          } catch {
+            Write-Warning "[WARN] MinIO test error: $($_.Exception.Message)"
+          }
+
+      - name: Test Data Pipeline (Airflow DAGs)
+        shell: powershell
+        timeout-minutes: 20
+        continue-on-error: true
+        run: |
+          Write-Host "Testing Airflow DAG definitions..." -ForegroundColor Cyan
+
+          $dagDir = "airflow/dags"
+          if (Test-Path $dagDir) {
+            $dagFiles = Get-ChildItem -Path $dagDir -Name "*.py" -Exclude "__*"
+
+            foreach ($dag in $dagFiles) {
+              Write-Host "Validating DAG: $dag" -ForegroundColor Yellow
+              try {
+                # Basic syntax check
+                python -m py_compile "$dagDir/$dag" 2>&1 | Out-Null
+                if ($LASTEXITCODE -eq 0) {
+                  Write-Host "[OK] $dag - syntax valid" -ForegroundColor Green
+                } else {
+                  Write-Warning "[WARN] $dag - syntax errors found"
+                }
+              } catch {
+                Write-Warning "[WARN] $dag - validation failed: $($_.Exception.Message)"
+              }
+            }
+          } else {
+            Write-Host "[INFO] Airflow DAG directory not found; skipping" -ForegroundColor Yellow
+          }
+
+      - name: Collect Endpoint Test Results
+        shell: powershell
+        continue-on-error: true
+        run: |
+          Write-Host "Collecting functional test results..." -ForegroundColor Cyan
+          $ErrorActionPreference = 'Continue'
+
+          # Test each endpoint and save results
+          @(
+            @{endpoint="/health"; file="endpoint-health.json"},
+            @{endpoint="/stats"; file="endpoint-stats.json"},
+            @{endpoint="/metrics"; file="endpoint-metrics.txt"}
+          ) | ForEach-Object {
+            try {
+              $uri = "http://localhost:8000$($_.endpoint)"
+              $response = Invoke-WebRequest -Uri $uri -TimeoutSec 10 -WarningAction SilentlyContinue
+              $response.Content | Out-File "logs/$($_.file)"
+            } catch {
+              Write-Host "Could not reach $($_.endpoint): $($_.Exception.Message)" | Out-File "logs/$($_.file)"
+            }
           }
 
       - name: Collect logs
