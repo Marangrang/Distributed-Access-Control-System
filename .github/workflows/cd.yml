@@ -62,6 +62,14 @@ jobs:
           $maxRetries = 10
           $retryCount = 0
 
+          function Test-Docker {
+            docker ps 2>&1 | Out-Null
+            return ($LASTEXITCODE -eq 0)
+          }
+
+          Write-Host "DOCKER_HOST=$($env:DOCKER_HOST)" -ForegroundColor DarkGray
+          Write-Host "DOCKER_CONTEXT=$($env:DOCKER_CONTEXT)" -ForegroundColor DarkGray
+
           # Try to start Docker Desktop service if it's installed but not running
           $dockerService = Get-Service -Name "com.docker.service" -ErrorAction SilentlyContinue
           if ($dockerService) {
@@ -74,12 +82,39 @@ jobs:
               }
             }
           } else {
-            Write-Host "Docker Desktop service not found. Ensure Docker Engine is installed and running." -ForegroundColor Yellow
+            Write-Host "Docker Desktop service not found." -ForegroundColor Yellow
+          }
+
+          # Try to start Docker Engine service if present
+          $engineService = Get-Service -Name "docker" -ErrorAction SilentlyContinue
+          if ($engineService) {
+            if ($engineService.Status -ne 'Running') {
+              Write-Host "Docker Engine service not running. Attempting to start..." -ForegroundColor Yellow
+              try {
+                Start-Service -Name "docker"
+              } catch {
+                Write-Host "Failed to start Docker Engine service: $($_.Exception.Message)" -ForegroundColor Yellow
+              }
+            }
+          } else {
+            Write-Host "Docker Engine service not found." -ForegroundColor Yellow
+          }
+
+          # Reset context to default if set
+          try {
+            docker context use default | Out-Null
+          } catch {
+            Write-Host "Unable to switch Docker context to default." -ForegroundColor Yellow
+          }
+
+          # If DOCKER_HOST points to Docker Desktop Linux pipe, try Docker Engine pipe instead
+          if ($env:DOCKER_HOST -match "dockerDesktopLinuxEngine") {
+            Write-Host "DOCKER_HOST points to Docker Desktop Linux pipe; switching to docker_engine pipe." -ForegroundColor Yellow
+            $env:DOCKER_HOST = "npipe:////./pipe/docker_engine"
           }
 
           while ($retryCount -lt $maxRetries) {
-            docker ps 2>&1 | Out-Null
-            if ($LASTEXITCODE -eq 0) {
+            if (Test-Docker) {
               Write-Host "[OK] Docker daemon ready" -ForegroundColor Green
               break
             }
@@ -91,10 +126,11 @@ jobs:
             Start-Sleep -Seconds 3
           }
 
-          if ($LASTEXITCODE -ne 0) {
+          if (-not (Test-Docker)) {
             Write-Host "Docker daemon is still unavailable. Diagnostics:" -ForegroundColor Red
             docker version
-            if ($dockerService) { Write-Host "Docker service status: $($dockerService.Status)" }
+            if ($dockerService) { Write-Host "Docker Desktop service status: $($dockerService.Status)" }
+            if ($engineService) { Write-Host "Docker Engine service status: $($engineService.Status)" }
             throw "Docker daemon not responding"
           }
 
