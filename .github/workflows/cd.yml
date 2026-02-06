@@ -236,9 +236,18 @@ jobs:
 
           # Force cleanup before starting
           Write-Host "Force removing any existing containers..." -ForegroundColor Yellow
+          function Remove-ContainerIfExists([string]$name) {
+            $exists = docker ps -a --filter "name=^${name}$" --format "{{.Names}}" 2>$null
+            if ($exists -eq $name) {
+              docker rm -f $name 2>&1 | Out-Null
+              Write-Host "Removed container: $name" -ForegroundColor DarkGray
+            } else {
+              Write-Host "Container not found: $name" -ForegroundColor DarkGray
+            }
+          }
           $containerNames = @("app", "db", "minio")
           foreach ($name in $containerNames) {
-            docker rm -f $name 2>&1 | Out-Null
+            Remove-ContainerIfExists $name
           }
           docker compose down --remove-orphans --volumes 2>&1 | Out-Null
           Start-Sleep -Seconds 2
