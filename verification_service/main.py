@@ -19,15 +19,26 @@ from prometheus_client import make_asgi_app
 import time
 
 # Import metrics
-from metrics import (
-    record_request,
-    observe_latency,
-    set_sync_lag,
-    record_similarity,
-    record_verification_result,
-    increment_active_connections,
-    decrement_active_connections
-)
+try:
+    from .metrics import (
+        record_request,
+        observe_latency,
+        set_sync_lag,
+        record_similarity,
+        record_verification_result,
+        increment_active_connections,
+        decrement_active_connections
+    )
+except ImportError:
+    from metrics import (
+        record_request,
+        observe_latency,
+        set_sync_lag,
+        record_similarity,
+        record_verification_result,
+        increment_active_connections,
+        decrement_active_connections
+    )
 
 # Import config utilities
 from config.config_loader import get_config, get_config_value

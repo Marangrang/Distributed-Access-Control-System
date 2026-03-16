@@ -58,6 +58,6 @@ def test_concurrent_requests():
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
         futures = [executor.submit(make_request) for _ in range(10)]
-        results = [f.result() for _ in futures]
+        results = [future.result() for future in futures]
 
     assert all(r.status_code == 200 for r in results)
