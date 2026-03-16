@@ -17,6 +17,8 @@ from PIL import Image
 from minio import Minio
 from minio.error import S3Error
 import json
+from urllib.parse import urlparse
+from urllib.parse import urlparse
 from tqdm import tqdm
 from datetime import datetime
 import faiss
@@ -363,19 +365,48 @@ class FaceRecognitionTrainer:
         }
 
 
+def normalize_minio_endpoint(raw_endpoint: str, raw_secure: str = None) -> Tuple[str, bool]:
+    """Normalize MinIO endpoint and secure flag from env vars."""
+    secure_override = None
+    if raw_secure is not None:
+        secure_override = raw_secure.lower() in ('1', 'true', 'yes')
+
+    endpoint = raw_endpoint
+    secure = secure_override if secure_override is not None else False
+
+    if '://' in raw_endpoint:
+        parsed = urlparse(raw_endpoint)
+        if parsed.scheme in ('http', 'https'):
+            endpoint = parsed.netloc or parsed.path
+            if secure_override is None:
+                secure = parsed.scheme == 'https'
+        else:
+            endpoint = parsed.netloc or parsed.path
+    elif '/' in raw_endpoint:
+        endpoint = raw_endpoint.split('/', 1)[0]
+
+    return endpoint, secure
+
+
 def main():
     """Main training pipeline"""
 
     # Configuration from environment variables
-    MINIO_ENDPOINT = os.getenv('MINIO_ENDPOINT', 'minio:9000')
+    raw_minio_endpoint = os.getenv('MINIO_ENDPOINT', 'minio:9000')
+    raw_minio_secure = os.environ.get('MINIO_SECURE')
+    MINIO_ENDPOINT, MINIO_SECURE = normalize_minio_endpoint(raw_minio_endpoint, raw_minio_secure)
     MINIO_ACCESS_KEY = os.getenv('MINIO_ACCESS_KEY', 'minioadmin')
     MINIO_SECRET_KEY = os.getenv('MINIO_SECRET_KEY', 'minioadmin')
-    MINIO_SECURE = os.getenv('MINIO_SECURE', 'false').lower() in ('1','true','yes')
     SOURCE_BUCKET = os.getenv('SOURCE_BUCKET', 'face-images')
     MODEL_BUCKET = os.getenv('MODEL_BUCKET', 'trained-models')
     TRAIN_PREFIX = 'train/'
     TEST_PREFIX = 'test/'
     THRESHOLD = float(os.getenv('SIMILARITY_THRESHOLD', '0.6'))
+
+    if raw_minio_endpoint != MINIO_ENDPOINT:
+        logger.info(f"Normalized MinIO endpoint: {raw_minio_endpoint} -> {MINIO_ENDPOINT}")
+    if raw_minio_secure is None and '://' in raw_minio_endpoint:
+        logger.info(f"Inferred MINIO_SECURE={MINIO_SECURE} from endpoint scheme")
 
     logger.info("=" * 80)
     logger.info("Face Recognition Training Pipeline (MinIO)")
